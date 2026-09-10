@@ -1,0 +1,139 @@
+:root {
+  --bg: #fbfbfa;
+  --fg: #141414;
+  --muted: #5a5a57;
+  --rule: #d8d8d3;
+  --accent: #b4532a;
+  --tint: #f4eee9;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #121212;
+    --fg: #ececea;
+    --muted: #a0a09c;
+    --rule: #2e2e2e;
+    --accent: #e08a62;
+    --tint: #1f1a17;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--fg);
+  font: 15px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+button { margin: 0; font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+
+header, footer {
+  display: flex;
+  gap: 18px;
+  padding: 10px 20px;
+  font-size: 13px;
+  color: var(--muted);
+}
+header { justify-content: space-between; border-bottom: 1px solid var(--rule); }
+footer { flex-wrap: wrap; border-top: 1px solid var(--rule); }
+#file { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--fg); }
+#status[data-state="error"], #status[data-state="offline"] { color: var(--accent); }
+kbd { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--fg); }
+
+main { flex: 1; display: flex; overflow-x: auto; overflow-y: hidden; }
+
+.col { flex: 0 0 320px; display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--rule); }
+.col-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 20px 8px;
+  border-bottom: 1px solid var(--rule);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  cursor: grab;
+}
+.col-head .t { padding: 2px 6px; margin-left: -6px; cursor: text; }
+.col-head .t:hover, .col-head.sel .t { color: var(--fg); }
+.col-head .n { margin-left: auto; font-weight: 400; font-variant-numeric: tabular-nums; }
+.col-head input { padding: 2px 6px; margin-left: -6px; text-transform: none; letter-spacing: 0; font-size: 14px; }
+
+.cards { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
+
+.card {
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--rule);
+  cursor: grab;
+  overflow-wrap: anywhere;
+}
+.card:hover { background: var(--tint); }
+.sel { box-shadow: inset 2px 0 var(--accent); background: var(--tint); }
+.card.edit { cursor: text; }
+.card .b {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-top: 2px;
+  font-size: 14px;
+  color: var(--muted);
+  white-space: pre-line;
+}
+.row { display: flex; align-items: baseline; gap: 8px; }
+.row .t { flex: 1; }
+
+.x { visibility: hidden; margin-right: -6px; padding: 0 6px; color: var(--muted); font-size: 16px; line-height: 1; }
+.card:hover .x, .col-head:hover .x { visibility: visible; }
+.x:hover { color: var(--accent); }
+
+input, textarea {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  resize: none;
+}
+.card textarea { margin-top: 4px; font-size: 14px; }
+::placeholder { color: var(--muted); opacity: .7; }
+
+.actions { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
+.actions .hint { margin-left: auto; font-size: 12px; color: var(--muted); }
+.btn {
+  padding: 3px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.btn:hover { border-color: var(--muted); color: var(--fg); }
+.btn.primary { background: var(--fg); border-color: var(--fg); color: var(--bg); }
+.btn.danger:hover { border-color: var(--accent); color: var(--accent); }
+
+.add-card, .add-col {
+  display: block;
+  width: 100%;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--rule);
+  text-align: left;
+  font-size: 13px;
+  color: var(--muted);
+}
+.add-col { flex: 0 0 200px; align-self: flex-start; padding-top: 14px; font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; border: 0; }
+.add-card:hover, .add-col:hover { color: var(--fg); background: var(--tint); }
+
+.dragging { opacity: .35; }
+.drop { height: 0; margin: -1px 20px; border-top: 2px solid var(--accent); }
+.drop.col-drop { flex: 0 0 2px; height: auto; margin: 0; border: 0; background: var(--accent); }
