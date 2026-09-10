@@ -6,9 +6,9 @@ A markdown file as a kanban board, served on localhost.
 
     go install github.com/xeome/kban@latest
 
-Or from a clone:
+Or from a clone, into `$(go env GOPATH)/bin`:
 
-    go build -o kban .
+    go install .
 
 ## Use
 
