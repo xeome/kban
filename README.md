@@ -26,6 +26,9 @@ column are written as `[x]`.
     # Done
     - [x] Set up repo
 
+Inside a column only checkbox items and their indented notes are kept; other
+lines are dropped when the board is next saved.
+
 Every edit is written back to the file; edits to the file show up in the
 browser. Concurrent edits are merged card by card, with the browser's change
 winning when both sides touched the same thing.
