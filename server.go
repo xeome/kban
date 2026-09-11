@@ -83,6 +83,7 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 	}()
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-store")
+	w.(http.Flusher).Flush() // open the stream now: the client waits for headers before it calls itself connected
 	for {
 		select {
 		case <-r.Context().Done():
