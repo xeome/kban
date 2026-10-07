@@ -80,6 +80,18 @@ function status(state, text) {
   el.textContent = text || { saving: 'saving…', saved: 'saved', offline: 'offline' }[state];
 }
 
+// --- theme ---------------------------------------------------------------
+
+// CSS follows the OS until the toggle is clicked; the click is remembered
+// on this device.
+const root = document.documentElement;
+try { if (localStorage.theme) root.dataset.theme = localStorage.theme; } catch {}
+$('#theme').addEventListener('click', () => {
+  const light = (root.dataset.theme || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')) === 'light';
+  root.dataset.theme = light ? 'dark' : 'light';
+  try { localStorage.theme = root.dataset.theme; } catch {}
+});
+
 // --- note ------------------------------------------------------------------
 
 // The note is the board's prelude. It edits in place: no edit mode, and
@@ -190,6 +202,7 @@ function endEdit() {
 
 document.addEventListener('keydown', (e) => {
   if (e.target.matches('input, textarea') || e.altKey || e.ctrlKey || e.metaKey) return;
+  if (e.key === 'Enter' && e.target.matches('button')) return; // let a focused button click
   const cols = S.board.columns;
   const { c, i } = S.sel;
   const arrow = { ArrowLeft: 'h', ArrowRight: 'l', ArrowUp: 'k', ArrowDown: 'j' }[e.key];
@@ -304,9 +317,14 @@ function leaveEdit(e) {
   if (!rendering && !e.currentTarget.contains(e.relatedTarget)) endEdit();
 }
 
+const icons = {
+  x: '<svg viewBox="0 0 16 16"><path d="M4.5 4.5l7 7m0-7l-7 7"/></svg>',
+  plus: '<svg viewBox="0 0 16 16"><path d="M8 3.5v9M3.5 8h9"/></svg>',
+};
+
 function deleteButton(at) {
-  return h('button', { class: 'x', tabIndex: -1, title: 'Delete',
-    onclick: (e) => { e.stopPropagation(); remove(at); } }, '×');
+  return h('button', { class: 'x', tabIndex: -1, title: 'Delete', innerHTML: icons.x,
+    onclick: (e) => { e.stopPropagation(); remove(at); } });
 }
 
 function isEditing(c, i) {
@@ -345,7 +363,7 @@ function columnEl(col, c) {
         col.cards.length ? null : deleteButton({ c, i: -1 }));
   return h('section', { class: 'col', data: { c } }, head,
     h('div', { class: 'cards' }, ...col.cards.map((card, i) => cardEl(card, c, i))),
-    h('button', { class: 'add-card', onclick: () => addCard(c, col.cards.length) }, '+ Add card'));
+    h('button', { class: 'add-card', innerHTML: icons.plus + 'Add card', onclick: () => addCard(c, col.cards.length) }));
 }
 
 function render() {
@@ -356,7 +374,7 @@ function render() {
   }
   board.replaceChildren(
     ...S.board.columns.map(columnEl),
-    h('button', { class: 'add-col', onclick: () => addColumn(S.board.columns.length) }, '+ Add column'));
+    h('button', { class: 'add-col', innerHTML: icons.plus + 'Add column', onclick: () => addColumn(S.board.columns.length) }));
   rendering = false;
   const field = board.querySelector('input');
   if (field) {
