@@ -186,3 +186,17 @@ func TestTitleCannotBreakTheFile(t *testing.T) {
 		t.Fatalf("Doing = %q", got)
 	}
 }
+
+func TestNoteCannotBreakTheFile(t *testing.T) {
+	f := serve(t)
+	base := f.get()
+	b := base
+	b.Prelude = "still a note\n# Injected\n- [ ] smuggled"
+	merged := f.put(base, b)
+	if len(merged.Columns) != 3 {
+		t.Fatalf("columns = %d, the note created one", len(merged.Columns))
+	}
+	if !strings.Contains(merged.Prelude, "# Injected") {
+		t.Fatalf("prelude = %q, the text was dropped instead of kept", merged.Prelude)
+	}
+}

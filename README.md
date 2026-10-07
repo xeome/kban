@@ -15,8 +15,9 @@ Or from a clone, into `$(go env GOPATH)/bin`:
     kban board.md            # default: ./TODO.md, created if missing
 
 Headings are columns, checkbox items are cards, indented lines under a card
-are its notes. Text above the first heading is kept as is. Cards in the last
-column are written as `[x]`.
+are its notes. Cards in the last column are written as `[x]`. Text above the
+first heading is kept as is and is editable at the top of the page — the place
+for standing instructions to the agents sharing the board.
 
     # Todo
     - [ ] Write parser

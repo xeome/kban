@@ -80,6 +80,22 @@ function status(state, text) {
   el.textContent = text || { saving: 'saving…', saved: 'saved', offline: 'offline' }[state];
 }
 
+// --- note ------------------------------------------------------------------
+
+// The note is the board's prelude. It edits in place: no edit mode, and
+// render() leaves it alone while it has focus so typing is never clobbered.
+const note = $('#note');
+note.addEventListener('input', () => {
+  S.board.prelude = note.value;
+  sizeNote();
+  schedule();
+});
+
+function sizeNote() {
+  note.style.height = 'auto';
+  note.style.height = note.scrollHeight + 'px';
+}
+
 // --- edits -----------------------------------------------------------------
 
 function commit(fn) {
@@ -93,7 +109,8 @@ function commit(fn) {
 
 function undo() {
   if (!S.undo.length) return;
-  S.board = S.undo.pop();
+  // Note edits take no snapshot, so a snapshot's prelude is stale: keep ours.
+  S.board = { ...S.undo.pop(), prelude: S.board.prelude };
   clampSel();
   schedule();
   render();
@@ -333,6 +350,10 @@ function columnEl(col, c) {
 
 function render() {
   rendering = true;
+  if (document.activeElement !== note) {
+    note.value = S.board.prelude || '';
+    sizeNote();
+  }
   board.replaceChildren(
     ...S.board.columns.map(columnEl),
     h('button', { class: 'add-col', onclick: () => addColumn(S.board.columns.length) }, '+ Add column'));

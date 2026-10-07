@@ -13,7 +13,11 @@ import (
 	"runtime"
 )
 
-const starter = `# Todo
+const starter = `This board is shared: the author edits it in a browser, agents edit this file as text.
+Agents: take cards from Todo, move them as you work, and expect new ones to appear. Cards are
+"- [ ] title" lines under a heading; anything else inside a column is dropped when the board is saved.
+
+# Todo
 - [ ] Welcome
   Drag cards between columns or use the keyboard: arrows move, Enter edits, n adds, x deletes, u undoes.
   Every change is written back to this file, and edits to the file show up here.

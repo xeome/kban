@@ -146,6 +146,7 @@ func (s *server) store(b Board) error {
 // clean strips what the file format cannot hold: newlines in titles and
 // trailing whitespace. Everything else is the user's to keep.
 func clean(b Board) Board {
+	b.Prelude = note(b.Prelude)
 	for i := range b.Columns {
 		c := &b.Columns[i]
 		c.Title = oneLine(c.Title)
@@ -163,6 +164,19 @@ func clean(b Board) Board {
 }
 
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// note keeps the text above the board from restructuring the file: a line
+// that would parse as a heading is indented, so it stays a note.
+func note(s string) string {
+	lines := strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n")
+	for i, l := range lines {
+		if headingRe.MatchString(l) {
+			l = " " + l
+		}
+		lines[i] = strings.TrimRight(l, " \t")
+	}
+	return strings.Trim(strings.Join(lines, "\n"), "\n")
+}
 
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")

@@ -33,8 +33,10 @@ person and the agents working alongside them.
 - **The browser never merges.** It sends `{base, board}`; the server merges
   against disk and returns the canonical board. Keep it that way — two merge
   implementations will disagree.
-- **Titles are one line.** `clean` in server.go is the trust boundary; a title
-  containing a newline would otherwise rewrite the file's structure.
+- **Titles are one line, and the note above the board holds no headings.**
+  `clean` in server.go is the trust boundary: a title containing a newline, or
+  a note line that would parse as a heading, rewrites the file's structure.
+  The note is the board's prelude — it is editable in the UI, so it is input.
 - **Writes are atomic** (temp file + rename) — an agent reading the file must
   never see a half-written board.
 - Changes to the file are picked up by polling, within 500ms.
