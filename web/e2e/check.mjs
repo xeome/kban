@@ -88,9 +88,10 @@ function agent(f, edit) { // jq '...' f > t && mv t f
   fs.renameSync(f + '.t', f);
 }
 const card = (b, title) => b.columns.flatMap((c) => c.cards).find((c) => c.title === title);
+const byId = (b, id) => b.columns.flatMap((c) => c.cards).find((c) => c.id === id);
 const comment = (text) => ({ author: 'claude', time: '2026-10-15T14:02:00+03:00', text });
 const board = (todo) => ({ instructions: 'test', columns: [
-  { title: 'Todo', cards: todo.map((t) => ({ title: t, notes: `notes of ${t}` })) }, { title: 'Doing', cards: [] }, { title: 'Done', cards: [] }] });
+  { title: 'Todo', cards: todo.map((t) => ({ id: `id-${t}`, title: t, notes: `notes of ${t}` })) }, { title: 'Doing', cards: [] }, { title: 'Done', cards: [] }] });
 // past the 300ms save debounce, then until the save has landed
 const saved = async (p) => { await sleep(400); return p.until('document.querySelector("#status").dataset.state === "saved" && document.querySelector("#status").textContent === "saved"', 4000); };
 
@@ -181,15 +182,15 @@ if (run('d3')) {
 if (run('follow')) {
   const { f, p } = await fresh(4303, ['A', 'B']);
   await p.ev(`document.querySelectorAll('.card')[1].click()`);
-  agent(f, (b) => b.columns[0].cards.unshift({ title: 'Z' }));
+  agent(f, (b) => b.columns[0].cards.unshift({ id: 'id-Z', title: 'Z' }));
   await p.until(`document.querySelectorAll('.card').length === 3`);
   check('the modal still shows its card after one is inserted above', await p.ev(`document.querySelector('#card-title').value === 'B' && document.querySelector('#card-where').textContent.includes('3 of 3')`));
   await p.ev(`document.querySelector('#card-draft').focus()`);
   await p.type('on B');
   await p.key('Enter', { ctrl: true });
   await saved(p);
-  check('a comment posted from the modal lands on the open card', JSON.stringify(card(read(f), 'B').comments?.map((c) => c.text)) === '["on B"]' && !card(read(f), 'Z').comments && !card(read(f), 'A').comments);
-  check('the posted comment carries the server user and an offset time', /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d$/.test(card(read(f), 'B').comments[0].time) && card(read(f), 'B').comments[0].author === os.userInfo().username);
+  check('a comment posted from the modal lands on the open card', JSON.stringify(byId(read(f), 'id-B').comments?.map((c) => c.text)) === '["on B"]' && !byId(read(f), 'id-Z').comments && !byId(read(f), 'id-A').comments);
+  check('the posted comment carries the server user and an offset time', /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d$/.test(byId(read(f), 'id-B').comments[0].time) && byId(read(f), 'id-B').comments[0].author === os.userInfo().username);
   await p.ev(`document.querySelector('#card-draft').focus()`);
   await p.type('half-written');
   await p.ev(`document.querySelector('#card-title').focus(); document.querySelector('#card-title').select()`);
@@ -199,6 +200,42 @@ if (run('follow')) {
   await p.key('ArrowDown', { ctrl: true });
   check('a draft follows its card through a rename', await p.ev(`document.querySelector('#card-title').value === 'B renamed' && document.querySelector('#card-draft').value === 'half-written'`),
     await p.ev(`document.querySelector('#card-title').value + ' / ' + document.querySelector('#card-draft').value`));
+  await saved(p);
+  agent(f, (b) => (byId(b, 'id-B').title = 'B by agent'));
+  check('the modal and its unsent draft stay on their card through an agent\'s rename',
+    await p.until(`document.querySelector('#card').open && document.querySelector('#card-title').value === 'B by agent' && document.querySelector('#card-draft').value === 'half-written'`) >= 0,
+    await p.ev(`document.querySelector('#card').open + ' ' + document.querySelector('#card-title')?.value + ' / ' + document.querySelector('#card-draft')?.value`));
+}
+
+// --- every card the browser adds gets its own id from kban ---------------------
+if (run('ids')) {
+  const { f, p } = await fresh(4312, ['A']);
+  const all = () => read(f).columns.flatMap((c) => c.cards);
+  await p.ev(`document.activeElement.blur()`);
+  await p.key('ArrowDown'); // select A
+  for (let k = 0; k < 20; k++) { await p.key('n'); await p.type(`new ${k}`); await p.key('Enter'); }
+  await saved(p);
+  const ids = all().map((c) => c.id);
+  check('20 cards added in a row land in the file, each with its own id',
+    ids.length === 21 && new Set(ids).size === 21 && ids.every(Boolean) && all()[20]?.title === 'new 19', JSON.stringify(all().map((c) => [c.id, c.title])));
+  await p.ev(`document.querySelectorAll('.card')[6].click()`); // new 5
+  await p.ev(`document.querySelector('#card-title').focus(); document.querySelector('#card-title').select()`);
+  await p.type('edited');
+  await p.key('Enter');
+  await p.key('Escape');
+  await p.until(`!document.querySelector('#card').open`, 1000);
+  await p.key('ArrowRight', { shift: true }); // to Doing
+  await saved(p);
+  const moved = read(f).columns[1].cards;
+  check('an edited and moved card is still one card with its id', moved.length === 1 && moved[0].id === ids[6] && moved[0].title === 'edited' && all().length === 21,
+    JSON.stringify(read(f).columns.map((c) => c.cards.map((x) => x.title))));
+  await p.key('u');
+  await saved(p);
+  await p.key('u');
+  await saved(p);
+  await sleep(200);
+  check('undoing both puts back every card, once each, in its place', JSON.stringify(all().map((c) => c.id)) === JSON.stringify(ids) && all()[6]?.title === 'new 5',
+    JSON.stringify(all().map((c) => [c.id, c.title])));
 }
 
 // --- u reverts only my last action --------------------------------------
@@ -209,7 +246,7 @@ if (run('undo-a') || run('undo')) {
   await p.key('ArrowRight', { shift: true }); // move A to Doing
   await saved(p);
   check('(a) setup: the move reached the file', read(f).columns[1].cards[0]?.title === 'A');
-  agent(f, (b) => { b.columns[0].cards.push({ title: 'agent card' }); card(b, 'B').comments = [comment('agent note')]; });
+  agent(f, (b) => { b.columns[0].cards.push({ id: 'id-agent', title: 'agent card' }); card(b, 'B').comments = [comment('agent note')]; });
   await p.until(`[...document.querySelectorAll('.card .t')].some((e) => e.textContent.trim() === 'agent card') && !!document.querySelector('.card .meta')`);
   await p.key('u');
   await saved(p);
@@ -240,14 +277,14 @@ if (run('undo')) {
   await p.type('Y2');
   await p.key('Enter');
   await saved(p);
-  check('(c) setup: the rename reached the file', !!card(read(f), 'Y2'));
+  check('(c) setup: the rename reached the file', byId(read(f), 'id-Y').title === 'Y2');
   agent(f, (b) => (card(b, 'Y2').comments = [comment('agent on Y2')]));
   await p.until(`[...document.querySelectorAll('.comment-text')].some((e) => e.textContent.trim() === 'agent on Y2')`);
   await p.key('u');
   await saved(p);
   await sleep(200);
-  const y = card(read(f), 'Y');
-  check('(c) undo of a rename restores the title and keeps the comment', !card(read(f), 'Y2') && y?.comments?.length === 1, JSON.stringify(read(f).columns[0]));
+  const y = byId(read(f), 'id-Y');
+  check('(c) undo of a rename restores the title and keeps the comment', y.title === 'Y' && y.comments?.length === 1 && read(f).columns[0].cards.length === 2, JSON.stringify(read(f).columns[0]));
   check('(c) the modal is still on that card', await p.ev(`document.querySelector('#card').open && document.querySelector('#card-title').value === 'Y'`));
 }
 
@@ -376,7 +413,7 @@ if (run('agent-md')) {
 // --- drag and drop, with real mouse input --------------------------------------
 if (run('drag')) {
   const f = path.join(dir, 'drag.json');
-  fs.writeFileSync(f, JSON.stringify({ columns: Array.from({ length: 9 }, (_, c) => ({ title: `C${c}`, cards: [{ title: `x${c}`, notes: '**x**' }, { title: `y${c}` }] })) }, null, 2));
+  fs.writeFileSync(f, JSON.stringify({ columns: Array.from({ length: 9 }, (_, c) => ({ title: `C${c}`, cards: [{ id: `x${c}`, title: `x${c}`, notes: '**x**' }, { id: `y${c}`, title: `y${c}` }] })) }, null, 2));
   const p = await tab(await server(f, 4311));
   await p.until(`document.querySelectorAll('.card').length === 18`);
   // The stream's onopen loads the board again, and that render scrolls the

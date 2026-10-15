@@ -3,6 +3,7 @@ package main
 import (
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -21,7 +22,7 @@ var uiFS, _ = fs.Sub(ui, "ui")
 type server struct {
 	path string
 	user string     // the author of comments posted from the browser
-	mu   sync.Mutex // serializes read-merge-write on the file
+	mu   sync.Mutex // serializes this server's own writes; update guards against everyone else's
 
 	subMu sync.Mutex
 	subs  map[chan state]struct{}
@@ -44,6 +45,7 @@ func (s *server) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/board", s.getBoard)
 	mux.HandleFunc("PUT /api/board", s.putBoard)
+	mux.HandleFunc("POST /api/ids", newIDs)
 	mux.HandleFunc("GET /api/events", s.events)
 	mux.Handle("GET /", http.FileServerFS(uiFS))
 	return mux
@@ -64,15 +66,23 @@ func (s *server) putBoard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
+	for _, b := range []Board{req.Base, req.Board} {
+		if _, err := checkIDs(b); err != nil {
+			http.Error(w, err.Error()+": reload this page", 400)
+			return
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	disk, err := s.load()
-	if err != nil {
+	out, err := update(s.path, func(disk *Board) error {
+		*disk = Merge(req.Base, req.Board, *disk)
+		return nil
+	})
+	if errors.As(err, new(unreadable)) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	out := Write(Merge(req.Base, req.Board, disk))
-	if err := s.store(out); err != nil {
+	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
@@ -152,12 +162,14 @@ func (s *server) state() state {
 	return state{Board: &b}
 }
 
-func (s *server) store(src string) error {
-	tmp := s.path + ".kban~"
-	if err := os.WriteFile(tmp, []byte(src), 0o644); err != nil {
-		return err
+// newIDs hands the browser ids for the cards it creates, so kban is the
+// only thing that makes ids.
+func newIDs(w http.ResponseWriter, r *http.Request) {
+	ids := make([]string, 16)
+	for i := range ids {
+		ids[i] = newID()
 	}
-	return os.Rename(tmp, s.path)
+	writeJSON(w, ids)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

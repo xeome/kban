@@ -126,22 +126,93 @@ func clone(b Board) Board {
 
 func add(b Board, col int, title string) Board {
 	b = clone(b)
-	b.Columns[col].Cards = append(b.Columns[col].Cards, Card{Title: title})
+	b.Columns[col].Cards = append(b.Columns[col].Cards, Card{ID: newID(), Title: title})
 	return b
 }
 
-func TestStarterNamesItsFile(t *testing.T) {
-	if got := starter("board.json").Instructions; !strings.Contains(got, "> t && mv t board.json") {
-		t.Fatalf("instructions = %q, want the agent's command to name the served file", got)
+func TestStarter(t *testing.T) {
+	b := starter("board.json")
+	if got := b.Instructions; !strings.Contains(got, "kban move") || !strings.Contains(got, "-f board.json") || strings.Contains(got, "jq") {
+		t.Errorf("instructions = %q, want the kban commands on the served file, and no jq", got)
 	}
+	if _, err := Parse(Write(b)); err != nil {
+		t.Errorf("the starter does not read back: %v", err)
+	}
+}
+
+// A card with no id from the browser would make the file unreadable.
+func TestPutRefusesIDless(t *testing.T) {
+	f := serve(t)
+	base := f.get()
+	was, _ := os.ReadFile(f.path)
+	idless := add(base, 1, "human card")
+	idless.Columns[1].Cards[0].ID = ""
+	stale := clone(base)
+	stale.Columns[0].Cards[0].ID = ""
+	for _, req := range [][2]Board{{base, idless}, {stale, base}} {
+		r := f.send(req[0], req[1])
+		body, _ := io.ReadAll(r.Body)
+		r.Body.Close()
+		if r.StatusCode != http.StatusBadRequest || !strings.Contains(string(body), "reload this page") {
+			t.Errorf("PUT with a card with no id: %s %s, want 400 and reload", r.Status, body)
+		}
+	}
+	if got, _ := os.ReadFile(f.path); !bytes.Equal(got, was) {
+		t.Errorf("file was rewritten:\n%s", got)
+	}
+}
+
+// A write lands between a writer's read and its rename. hook makes it land
+// there every time instead of once in a while.
+func TestCommandDuringSave(t *testing.T) {
+	t.Cleanup(func() { beforeRename = func() {} })
+	once := func(f func()) {
+		beforeRename = func() { beforeRename = func() {}; f() }
+	}
+	agent := Comment{"claude", "2026-10-15T14:02:00+03:00", "fixed"}
+	check := func(f *fixture, want string) {
+		t.Helper()
+		c := f.read().Columns[0].Cards[0]
+		if c.Notes != "typed" || len(c.Comments) != 2 || c.Comments[1].Text != "fixed" {
+			t.Errorf("%s: card = %+v, want the notes and the agent comment", want, c)
+		}
+		if ents, _ := os.ReadDir(filepath.Dir(f.path)); len(ents) != 1 {
+			t.Errorf("%s: directory holds %d files, want only the board", want, len(ents))
+		}
+	}
+
+	f := serve(t)
+	base := f.get()
+	once(func() {
+		f.agent(func(b *Board) { c := &b.Columns[0].Cards[0]; c.Comments = append(c.Comments, agent) })
+	})
+	mine := clone(base)
+	mine.Columns[0].Cards[0].Notes = "typed"
+	r := f.send(base, mine)
+	r.Body.Close()
+	check(f, "agent writes during a PUT")
+
+	f = serve(t)
+	base = f.get()
+	mine = clone(base)
+	mine.Columns[0].Cards[0].Notes = "typed"
+	once(func() { f.put(base, mine) })
+	if code := cli([]string{"comment", "-f", f.path, "-a", "claude", base.Columns[0].Cards[0].ID, "fixed"}, nil, io.Discard, io.Discard); code != 0 {
+		t.Fatalf("comment exited %d", code)
+	}
+	check(f, "browser saves during a command")
 }
 
 func TestPutWritesFile(t *testing.T) {
 	f := serve(t)
+	os.Chmod(f.path, 0o640)
 	base := f.get()
 	f.put(base, add(base, 1, "human card"))
 	if got := titles(f.read(), 1); got != "human card" {
 		t.Fatalf("Doing = %q", got)
+	}
+	if fi, _ := os.Stat(f.path); fi.Mode().Perm() != 0o640 {
+		t.Fatalf("mode = %v, want the file's own 0640 kept", fi.Mode().Perm())
 	}
 }
 
@@ -149,7 +220,9 @@ func TestAgentEditDuringBrowserEdit(t *testing.T) {
 	f := serve(t)
 	base := f.get() // the browser loads, then sits there
 
-	f.agent(func(b *Board) { b.Columns[0].Cards = append(b.Columns[0].Cards, Card{Title: "agent card"}) })
+	f.agent(func(b *Board) {
+		b.Columns[0].Cards = append(b.Columns[0].Cards, Card{ID: "agentcrd", Title: "agent card"})
+	})
 	merged := f.put(base, add(base, 1, "human card")) // browser saves against its stale view
 
 	if got := titles(merged, 0); got != "Welcome,agent card" {
@@ -210,7 +283,9 @@ func TestAgentEditReachesOpenTabs(t *testing.T) {
 	}
 
 	time.Sleep(600 * time.Millisecond) // let watch take its first reading
-	f.agent(func(b *Board) { b.Columns[0].Cards = append(b.Columns[0].Cards, Card{Title: "agent card"}) })
+	f.agent(func(b *Board) {
+		b.Columns[0].Cards = append(b.Columns[0].Cards, Card{ID: "agentcrd", Title: "agent card"})
+	})
 	if st := next(); st.Board == nil || titles(*st.Board, 0) != "Welcome,agent card" {
 		t.Fatalf("pushed %+v, want the agent's card in Todo", st)
 	}

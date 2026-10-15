@@ -16,12 +16,13 @@ export const S = {
   sel: { c: 0, i: -1 },   // i === -1 selects the column header
   edit: null,             // { c, i } for a new card's title, { c } for a column title
   editSnap: null,
-  undo: [],               // { before, after } board steps, or { key, field, old } modal field steps
+  undo: [],               // { before, after } board steps
   dirty: false,
   inflight: false,
   timer: 0,
-  open: null,             // key of the card in the modal: { title, n }
-  drafts: {},             // unsent comment per card key
+  open: null,             // id of the card in the modal
+  drafts: {},             // unsent comment per card id
+  ids: [],                // ids kban made for cards this tab will add
   drag: null,             // { kind: 'card', from: {c, i}, to } | { kind: 'col', from: c, to }
 };
 
@@ -34,6 +35,18 @@ export async function load() {
   $('#file').textContent = file;
   document.title = file;
   receive({ board, error });
+  refill();
+}
+
+// kban makes every card id. The tab keeps at least 16 in hand, topped up
+// after every add, so adding a card never waits on the server: a burst of
+// adds outruns a round trip at 4, measured.
+let refilling = false;
+async function refill() {
+  if (S.ids.length >= 16 || refilling) return;
+  refilling = true;
+  try { S.ids.push(...await (await fetch('/api/ids', { method: 'POST' })).json()); } catch {}
+  refilling = false;
 }
 
 function receive({ board, error }) {
@@ -143,34 +156,17 @@ function grow(el) {
   el.style.height = el.scrollHeight + 'px';
 }
 
-// --- cards by key ------------------------------------------------------------
+// --- cards by id ------------------------------------------------------------
 
-// A card is known by its title and which repeat of that title it is, the
-// same identity the server merges by, so the modal follows its card while
-// the board changes underneath it.
-export function keyAt(c, i) {
-  const title = S.board.columns[c].cards[i].title;
-  let n = 0;
-  for (let cc = 0; cc <= c; cc++) {
-    const cards = S.board.columns[cc].cards;
-    for (let ii = 0; ii < (cc === c ? i : cards.length); ii++) if (cards[ii].title === title) n++;
-  }
-  return { title, n };
-}
-
-export function find(key) {
-  if (!key) return null;
-  let n = 0;
-  for (const [c, col] of S.board.columns.entries()) {
-    for (const [i, card] of col.cards.entries()) {
-      if (card.title === key.title && n++ === key.n) return { c, i, card };
-    }
+// The modal, its drafts and the rendered cards follow a card by its id, the
+// identity the server merges by, so they stay on it through an agent's
+// rename or move.
+export function find(id, b = S.board) {
+  for (const [c, col] of b.columns.entries()) {
+    for (const [i, card] of col.cards.entries()) if (card.id === id) return { c, i, card };
   }
   return null;
 }
-
-const sameKey = (a, b) => !!a && !!b && a.title === b.title && a.n === b.n;
-export const draftKey = (k) => `${k.n}\u0000${k.title}`;
 
 // --- edits -----------------------------------------------------------------
 
@@ -193,23 +189,18 @@ function remember(step) {
   if (S.undo.length > 100) S.undo.shift();
 }
 
-function undo() {
-  const step = S.undo.pop();
-  if (!step) return;
-  if (step.field) undoField(step);
-  else undoBoard(step);
+// A modal field records its step when it is left: after is the board now,
+// before is the same board with only that field set back, so undoing it
+// never reverts what an agent wrote while you typed.
+function fieldStep(id, field, old) {
+  const before = clone(S.board);
+  find(id, before).card[field] = old;
+  remember({ before, after: clone(S.board) });
 }
 
-// A modal field is undone as an ordinary edit of the board as it is now.
-// Sent as {after, before}, a title revert would be a delete plus an add and
-// drop whatever the card gained since.
-function undoField(step) {
-  const at = find(step.key);
-  if (!at) return status('error', 'that card is gone; nothing undone');
-  at.card[step.field] = step.old;
-  if (sameKey(S.open, step.key)) S.open = keyAt(at.c, at.i);
-  schedule();
-  render();
+function undo() {
+  const step = S.undo.pop();
+  if (step) undoBoard(step);
 }
 
 async function undoBoard(step) {
@@ -239,8 +230,11 @@ function clampSel() {
 
 export function addCard(c, i) {
   if (!S.board.columns.length) return;
+  const id = S.ids.shift();
+  refill();
+  if (!id) return status('error', 'kban has not sent card ids yet; try again');
   S.sel = { c, i };
-  startEdit({ c, i }, (cols) => cols[c].cards.splice(i, 0, { title: '' }));
+  startEdit({ c, i }, (cols) => cols[c].cards.splice(i, 0, { id, title: '' }));
 }
 
 export function addColumn(at) {
@@ -417,7 +411,7 @@ export function openCard(c, i) {
   if (!S.base) return;
   leaveField();
   S.sel = { c, i };
-  S.open = keyAt(c, i);
+  S.open = S.board.columns[c].cards[i].id;
   render();
   if (!dialog.open) dialog.showModal();
   grow($('#card-notes')); // a closed dialog measures nothing: size the fields once it shows
@@ -488,8 +482,8 @@ function cardKeys(e) {
   }
 }
 
-// The title commits on Enter or blur, not per keystroke: every rename that
-// reaches the file drops what an agent added to the card meanwhile.
+// The title commits on Enter or blur, not per keystroke, so one rename is
+// one undo step.
 let titleFrom = null;
 export function titleFocus(e) { titleFrom = e.currentTarget.value; }
 export function titleBlur(e) {
@@ -499,18 +493,12 @@ export function titleBlur(e) {
   const at = find(S.open);
   if (!at || field.value === from) return;
   if (!field.value.trim()) {
-    field.value = at.card.title; // agents and the merge cannot tell untitled cards apart
+    field.value = at.card.title; // every card has a title: kban add and set refuse an empty one too
     return;
   }
   const old = at.card.title;
-  const oldDraft = draftKey(S.open);
   at.card.title = field.value;
-  S.open = keyAt(at.c, at.i);
-  if (S.drafts[oldDraft] !== undefined) {
-    S.drafts[draftKey(S.open)] = S.drafts[oldDraft];
-    delete S.drafts[oldDraft];
-  }
-  remember({ key: S.open, field: 'title', old });
+  fieldStep(S.open, 'title', old);
   schedule();
   render();
 }
@@ -547,9 +535,7 @@ export function notesBlur(e) {
     for (const end of ['pointerup', 'pointercancel']) addEventListener(end, release, { signal: done.signal });
   }
   const at = find(S.open);
-  if (at && notesFrom !== null && (at.card.notes || '') !== notesFrom) {
-    remember({ key: S.open, field: 'notes', old: notesFrom });
-  }
+  if (at && notesFrom !== null && (at.card.notes || '') !== notesFrom) fieldStep(S.open, 'notes', notesFrom);
   notesFrom = null;
   if (!rendering) render();
 }
@@ -557,7 +543,7 @@ export function notesBlur(e) {
 addEventListener('resize', () => { if (dialog.open) { grow($('#card-notes')); grow($('#card-draft')); } }); // text re-wraps
 
 export function draftInput(e) {
-  if (S.open) S.drafts[draftKey(S.open)] = e.currentTarget.value;
+  if (S.open) S.drafts[S.open] = e.currentTarget.value;
   grow(e.currentTarget);
   render(); // the post button follows the draft
 }
@@ -567,7 +553,7 @@ export function post() {
   const text = draft.value.trim();
   const at = find(S.open);
   if (!text || !at) return;
-  delete S.drafts[draftKey(S.open)];
+  delete S.drafts[S.open];
   draft.value = ''; // before commit, whose render disables the post button; render leaves a focused field alone
   commit(() => {
     at.card.comments = [...(at.card.comments || []), { author: S.user, time: now(), text }];
@@ -594,10 +580,7 @@ export function moveOpenCard(to) {
   leaveField();
   const at = find(S.open);
   if (!at || to === at.c) return;
-  commit((cols) => {
-    cols[to].cards.push(...cols[at.c].cards.splice(at.i, 1));
-    S.open = keyAt(to, cols[to].cards.length - 1); // before commit renders: a same-titled card may take the old key
-  });
+  commit((cols) => cols[to].cards.push(...cols[at.c].cards.splice(at.i, 1)));
 }
 
 // Local time with its offset, the form `date -Iseconds` gives agents, so
@@ -628,7 +611,7 @@ export function render() {
   if (S.open && !find(S.open)) {
     S.open = null;
     dialog.close();
-    status('saved', 'the open card was renamed or removed');
+    status('saved', 'the open card was removed');
   }
   paint(h(Board), board);
   paint(h(CardBody), dialog);

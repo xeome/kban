@@ -1,8 +1,7 @@
 import { useRef } from 'preact/hooks';
 import { md } from './md.js';
 import {
-  S, addCard, addColumn, closeCard, deleteComment, deleteOpenCard, draftInput, draftKey, editKeys, find, keyAt,
-  leaveEdit, moveOpenCard, notesBlur, notesFocus, notesInput, openCard, post, remove, startEdit, step, titleBlur,
+  S, addCard, addColumn, closeCard, deleteComment, deleteOpenCard, draftInput, editKeys, find, leaveEdit, moveOpenCard, notesBlur, notesFocus, notesInput, openCard, post, remove, startEdit, step, titleBlur,
   titleFocus, when,
 } from './store.js';
 
@@ -72,7 +71,7 @@ function Column({ col, c }) {
   return (
     <section class="col" data-c={c}>
       {head}
-      <div class="cards">{col.cards.map((card, i) => <Card key={draftKey(keyAt(c, i))} card={card} c={c} i={i} />)}</div>
+      <div class="cards">{col.cards.map((card, i) => <Card key={card.id} card={card} c={c} i={i} />)}</div>
       <button class="add-card" onClick={() => addCard(c, col.cards.length)}><Plus />Add card</button>
     </section>
   );
@@ -80,7 +79,7 @@ function Column({ col, c }) {
 
 function colKey(c) {
   const title = S.board.columns[c].title;
-  return draftKey({ title, n: S.board.columns.slice(0, c).filter((col) => col.title === title).length });
+  return `${S.board.columns.slice(0, c).filter((col) => col.title === title).length}\u0000${title}`;
 }
 
 export function Board() {
@@ -111,7 +110,7 @@ export function CardBody() {
   const { c, i, card } = at;
   const col = S.board.columns[c];
   const comments = card.comments || [];
-  const draft = S.drafts[draftKey(S.open)] || '';
+  const draft = S.drafts[S.open] || '';
   return (
     <>
       <header>

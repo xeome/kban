@@ -13,6 +13,7 @@ const sample = `{
       "title": "Todo",
       "cards": [
         {
+          "id": "k3x9pq2a",
           "title": "Write parser",
           "notes": "first line\nsecond line",
           "comments": [
@@ -24,6 +25,7 @@ const sample = `{
           ]
         },
         {
+          "id": "m7bz4ttd",
           "title": "fix: colon in title"
         }
       ]
@@ -64,6 +66,11 @@ func TestParseRejects(t *testing.T) {
 		{"unknown field whose name is valid elsewhere", "{\n  \"columns\": [\n    {\"title\": \"T\", \"cards\": [\n      {\"title\": \"a\",\n       \"cards\": []}\n    ]}\n  ]\n}\n",
 			`line 5: json: unknown field "cards"`},
 		{"empty", " \n", "empty"},
+		{"card with no id", "{\n  \"columns\": [\n    {\"title\": \"T\", \"cards\": [\n      {\"id\": \"x\", \"title\": \"a\"},\n      {\"title\": \"b\"}\n    ]}\n  ]\n}\n",
+			`line 5: card "b" has no id`},
+		{"repeated id", "{\n  \"columns\": [\n    {\"title\": \"T\", \"cards\": [{\"id\": \"x\", \"title\": \"a\"}]},\n    {\"title\": \"U\", \"cards\": [\n      {\"id\": \"x\", \"title\": \"b\"}\n    ]}\n  ]\n}\n",
+			`line 5: card "b" has the id "x" of an earlier card`},
+		{"null card", "{\"columns\": [{\"title\": \"T\", \"cards\": [{\"id\": \"x\", \"title\": \"a\"},\n  null]}]}\n", `line 2: card "" has no id`},
 	}
 	for _, tc := range cases {
 		_, err := Parse(tc.src)
@@ -77,7 +84,7 @@ func board(cols ...Column) Board { return Board{Columns: cols} }
 func col(title string, titles ...string) Column {
 	c := Column{Title: title}
 	for _, t := range titles {
-		c.Cards = append(c.Cards, Card{Title: t})
+		c.Cards = append(c.Cards, Card{ID: t, Title: t})
 	}
 	return c
 }
@@ -91,7 +98,7 @@ func TestMerge(t *testing.T) {
 		{"client moves, disk edits notes",
 			board(col("Todo", "b", "c"), col("Done", "a")),
 			board(col("Todo", "a", "b", "c"), col("Done")).with(0, 1, func(c *Card) { c.Notes = "note" }),
-			board(Column{Title: "Todo", Cards: []Card{{Title: "b", Notes: "note"}, {Title: "c"}}}, col("Done", "a"))},
+			board(Column{Title: "Todo", Cards: []Card{{ID: "b", Title: "b", Notes: "note"}, {ID: "c", Title: "c"}}}, col("Done", "a"))},
 		{"client deletes, disk adds",
 			board(col("Todo", "a", "c"), col("Done")),
 			board(col("Todo", "a", "b", "c", "d"), col("Done")),
@@ -116,10 +123,11 @@ func TestMerge(t *testing.T) {
 			board(col("Todo", "b", "c"), col("Done", "a")),
 			board(col("Todo", "a", "b", "c")),
 			board(col("Todo", "b", "c", "a"))},
-		{"both add the same title: client's column wins",
-			board(col("Todo", "a", "b", "c", "n"), col("Done")),
-			board(col("Todo", "a", "b", "c"), col("Done", "n")),
-			board(col("Todo", "a", "b", "c", "n"), col("Done"))},
+		{"both add the same title: two cards",
+			board(col("Todo", "a", "b", "c"), col("Done")).with(0, -1, func(c *Card) { *c = Card{ID: "n1", Title: "n"} }),
+			board(col("Todo", "a", "b", "c"), col("Done")).with(1, -1, func(c *Card) { *c = Card{ID: "n2", Title: "n"} }),
+			board(col("Todo", "a", "b", "c"), col("Done")).with(0, -1, func(c *Card) { *c = Card{ID: "n1", Title: "n"} }).
+				with(1, -1, func(c *Card) { *c = Card{ID: "n2", Title: "n"} })},
 		{"client reorders columns, disk adds one: it is kept with its cards",
 			board(col("Done"), col("Todo", "a", "b", "c")),
 			board(col("Todo", "a", "b", "c"), col("Done"), col("Blocked", "x")),
@@ -128,6 +136,30 @@ func TestMerge(t *testing.T) {
 			board(col("Todo", "a", "b", "c"), col("Done"), col("Review")),
 			board(col("Todo", "a", "b", "c"), col("Review", "r"), col("Done")),
 			board(col("Todo", "a", "b", "c"), col("Done"), col("Review", "r"))},
+	}
+	for _, tc := range cases {
+		if got := Merge(base, tc.client, tc.disk); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s:\n got %+v\nwant %+v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// A rename on one side and an edit on the other are two edits of one card.
+func TestMergeRename(t *testing.T) {
+	base := board(col("Todo", "a", "b"))
+	rename := func(c *Card) { c.Title = "a2" }
+	comment := func(c *Card) { c.Comments = []Comment{{"claude", "t1", "done"}} }
+	notes := func(c *Card) { c.Notes = "n" }
+	both := func(f, g func(*Card)) func(*Card) { return func(c *Card) { f(c); g(c) } }
+	cases := []struct {
+		name               string
+		client, disk, want Board
+	}{
+		{"client renames, disk comments", base.with(0, 0, rename), base.with(0, 0, comment), base.with(0, 0, both(rename, comment))},
+		{"disk renames, client comments", base.with(0, 0, comment), base.with(0, 0, rename), base.with(0, 0, both(rename, comment))},
+		{"client renames, disk edits notes", base.with(0, 0, rename), base.with(0, 0, notes), base.with(0, 0, both(rename, notes))},
+		{"disk renames, client edits notes", base.with(0, 0, notes), base.with(0, 0, rename), base.with(0, 0, both(rename, notes))},
+		{"both rename: client wins", base.with(0, 0, rename), base.with(0, 0, func(c *Card) { c.Title = "disk" }), base.with(0, 0, rename)},
 	}
 	for _, tc := range cases {
 		if got := Merge(base, tc.client, tc.disk); !reflect.DeepEqual(got, tc.want) {
@@ -180,12 +212,15 @@ func TestMergeComments(t *testing.T) {
 	}
 }
 
-// with returns a copy of b with one card changed.
 func (b Board) with(c, i int, edit func(*Card)) Board {
 	out := Board{Instructions: b.Instructions}
 	for _, col := range b.Columns {
 		col.Cards = append([]Card(nil), col.Cards...)
 		out.Columns = append(out.Columns, col)
+	}
+	if i == -1 {
+		out.Columns[c].Cards = append(out.Columns[c].Cards, Card{})
+		i = len(out.Columns[c].Cards) - 1
 	}
 	edit(&out.Columns[c].Cards[i])
 	return out

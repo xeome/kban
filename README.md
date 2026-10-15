@@ -1,8 +1,8 @@
 # kban
 
 A JSON file as a kanban board, served on localhost. You work it in a browser
-while agents edit the file; each card carries notes and a comment thread
-between you.
+while agents change it with kban's commands; each card carries notes and a
+comment thread between you.
 
 ## Install
 
@@ -18,6 +18,17 @@ Or from a clone, into `$(go env GOPATH)/bin`:
 
 Flags: `-p 4177` port (the next free of ten if taken), `-no-open`.
 
+Agents change the board with these, never by editing the file:
+
+    kban show [-f FILE] [ID]                 # the board, or one card, as JSON
+    kban add [-f FILE] COLUMN TITLE          # prints the new card's id
+    kban move [-f FILE] ID COLUMN            # to the end of COLUMN
+    kban set [-f FILE] ID title|notes TEXT
+    kban comment [-f FILE] [-a NAME] ID TEXT
+
+`TEXT` `-` reads stdin. Exit 1 is a usage or lookup error, 2 a file kban
+cannot read; neither writes the file.
+
 ## The file
 
 ```json
@@ -28,6 +39,7 @@ Flags: `-p 4177` port (the next free of ten if taken), `-no-open`.
       "title": "Todo",
       "cards": [
         {
+          "id": "q4mz7kxa",
           "title": "Fix login redirect",
           "notes": "Bottom line: cookie path was wrong.",
           "comments": [
@@ -44,16 +56,12 @@ Flags: `-p 4177` port (the next free of ten if taken), `-no-open`.
 }
 ```
 
-- Cards and columns are identified by title.
+- Every card has an id kban gives it, which commands, branch names and the
+  like can use; a column is identified by its title.
 - `notes` and `comments` may be left out.
-- An agent comments by appending to the card's `comments`, with the time from
-  `date -Iseconds`.
-- Change the file in one step from what is on disk:
-  `jq '...' TODO.json > t && mv t TODO.json`. An agent that edits a copy read
-  earlier overwrites whatever changed meanwhile.
-- Any other field, a syntax error or trailing text makes the file unreadable.
-  The page shows the error with its line, and kban does not write the file
-  until it reads again.
+- Any other field, a card with no id or a repeated one, a syntax error or
+  trailing text makes the file unreadable. The page shows the error with its
+  line, and kban does not write the file until it reads again.
 
 When you and an agent change the board at once, each card, column and order
 merges separately, and your change wins where both touched the same thing.

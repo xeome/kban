@@ -1,7 +1,7 @@
 # kban
 
 A JSON file served as a kanban board on localhost. Humans drag cards in a
-browser; agents edit the same file. Both at once is the point — the
+browser; agents change the same file with the kban commands. Both at once is the point — the
 file is the only state, and it is meant to be a shared work queue between a
 person and the agents working alongside them.
 
@@ -9,6 +9,7 @@ person and the agents working alongside them.
 
     go test ./...          # everything; ~1s, no bun needed
     go run . board.json    # serve a board (-p port, -no-open)
+    go run . show -f board.json   # the agent commands: show, add, move, set, comment
 
     cd web && bun install --frozen-lockfile  # once, for UI work
     bun build.js           # web/src -> ui/app.js; commit both
@@ -20,6 +21,8 @@ person and the agents working alongside them.
 
     board.go    Parse / Write / Merge — the format and the conflict rules
     server.go   HTTP + SSE, file read/write, the 409 on an unreadable file
+    file.go     update: the one way the file is written
+    cli.go      the agent commands
     main.go     flags, port picking, browser opening
     ui/         embedded (go:embed) and served as is; app.js is built, never edited
     web/src/    the UI source: store.js (state, saving, keys, drag), view.jsx
@@ -27,34 +30,37 @@ person and the agents working alongside them.
 
 ## Rules that break things when ignored
 
-- **The file is the database.** No sidecar state, no ids in the file.
-  Cards and columns are identified by title; duplicates are numbered by
-  position during a merge. Comments follow their card's title.
+- **The file is the database, and kban is its only writer.** No sidecar
+  state. Every card has an id kban made (`newID`), unique in the file; the
+  browser draws its ids from `POST /api/ids`, agents use the commands. A
+  column is identified by its title, repeats numbered by position.
 - **The format is strict, and an unreadable file is never written.** `Parse`
-  rejects unknown fields, trailing data and syntax errors with the line, and
-  the server answers 409 instead of overwriting. Accepting and dropping a
-  field would silently delete what an agent wrote. One exception: a key
-  repeated in one object keeps its last value (encoding/json), and keys match
-  case-insensitively; the starter instructions tell agents to append to the
-  existing `comments`.
+  rejects unknown fields, trailing data, syntax errors, and a card with no
+  id or a repeated one, with the line; the server answers 409 and a command
+  exits 2 instead of overwriting. Accepting and dropping a field would
+  silently delete what an agent wrote. One exception: a key repeated in one
+  object keeps its last value (encoding/json), and keys match
+  case-insensitively.
 - **`Parse` and `Write` must round-trip.** `Write(Parse(s)) == s` for any file
   kban itself produced.
 - **The browser never merges.** It sends `{base, board}`; the server merges
   against disk and returns the file it wrote. Keep it that way — two merge
   implementations will disagree. Undo is the same request with the step's
-  `{after, before}`; a modal field is undone as an ordinary edit instead,
-  because a title revert sent as `{after, before}` drops what the card gained
-  since.
+  `{after, before}`. A modal field's step is built when the field is left:
+  before is the board then with only that field set back, so undo never
+  reverts what an agent wrote while you typed.
 - **The server stores what it merged, unaltered.** The JSON encoder is the
-  trust boundary: no text can add structure. Normalising text on the way in
-  makes the browser's next base disagree with disk, and an edit becomes a
-  second card.
-- **Writes are atomic** (temp file + rename) — an agent reading the file must
-  never see a half-written board.
+  trust boundary: no text can add structure, so none is escaped or
+  normalised on the way in.
+- **Every write goes through `update`,** which is atomic (temp file +
+  rename) and conditional: it renames only if the file still holds what it
+  read, else it reads and changes it again. So a command and a browser save
+  landing at once both keep their change, and a reader never sees half a
+  board.
 - Changes to the file are picked up by polling, within 500ms.
 - **Render never touches a focused field.** The modal follows its card by
-  key (title + repeat number) across every board the server pushes, so an
-  agent's comment lands while you type without moving your caret. Every
+  id across every board the server pushes, so an agent's comment or rename
+  lands while you type without moving your caret. Every
   text field Preact owns is a `Field` (view.jsx), which goes uncontrolled
   while focused; always pass its `value`.
 - **File text becomes markup only through `md()`;** everything else is
@@ -69,7 +75,8 @@ person and the agents working alongside them.
 
 `board_test.go` covers the format and merge rules; `server_test.go` covers the
 loop that matters — an agent editing the file while a browser holds a stale
-view — over a real HTTP server and a real temp file.
+view — over a real HTTP server and a real temp file; `cli_test.go` covers the
+commands.
 
 Adding a merge or format rule means a case in those tables. Verify a new test
 fails before it passes: break the line it covers, run it, put the line back.

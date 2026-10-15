@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,7 @@ type Comment struct {
 }
 
 type Card struct {
+	ID       string    `json:"id"`
 	Title    string    `json:"title"`
 	Notes    string    `json:"notes,omitempty"`
 	Comments []Comment `json:"comments,omitempty"`
@@ -27,8 +29,8 @@ type Column struct {
 	Cards []Card `json:"cards"`
 }
 
-// Board is the whole file. There are no ids: cards and columns are
-// identified by title.
+// Board is the whole file. A card is identified by its id, which kban
+// assigns; a column by its title.
 type Board struct {
 	Instructions string   `json:"instructions"`
 	Columns      []Column `json:"columns"`
@@ -51,8 +53,39 @@ func Parse(src string) (Board, error) {
 		rest := strings.TrimLeft(src[end:], " \t\r\n")
 		return Board{}, fmt.Errorf("line %d: unexpected data after the board", line(src, int64(len(src)-len(rest))))
 	}
+	if at, err := checkIDs(b); err != nil {
+		err = fmt.Errorf("%w; cards are added with kban add, never by editing the file", err)
+		// A repeated "cards" key walks a card encoding/json then drops,
+		// so the offsets can disagree with b: report no line then.
+		if _, cards := scan(src); at < len(cards) {
+			err = fmt.Errorf("line %d: %w", line(src, cards[at]), err)
+		}
+		return Board{}, err
+	}
 	return b, nil
 }
+
+func checkIDs(b Board) (int, error) {
+	seen := map[string]bool{}
+	i := 0
+	for _, col := range b.Columns {
+		for _, c := range col.Cards {
+			if c.ID == "" {
+				return i, fmt.Errorf("card %q has no id", c.Title)
+			}
+			if seen[c.ID] {
+				return i, fmt.Errorf("card %q has the id %q of an earlier card", c.Title, c.ID)
+			}
+			seen[c.ID] = true
+			i++
+		}
+	}
+	return -1, nil
+}
+
+// newID returns 8 random characters from [a-z2-7]: 40 bits, so two cards
+// on one board share one about once in a trillion boards of a thousand.
+func newID() string { return strings.ToLower(rand.Text()[:8]) }
 
 func line(src string, offset int64) int { return strings.Count(src[:offset], "\n") + 1 }
 
@@ -66,24 +99,28 @@ func locate(src string, err error) error {
 		return fmt.Errorf("line %d: %w", line(src, typ.Offset), err)
 	}
 	if strings.Contains(err.Error(), "unknown field") {
-		if at := unknownKey(src); at >= 0 {
+		if at, _ := scan(src); at >= 0 {
 			return fmt.Errorf("line %d: %w", line(src, at), err)
 		}
 	}
 	return err
 }
 
-// unknownKey returns the offset of the first key Board's json tags do not
-// have. encoding/json names an unknown field but not where it is, and the
-// same name can be valid elsewhere in the file, so the file is walked
-// against the types instead of searched.
-func unknownKey(src string) int64 {
+// scan returns the offset of the first key Board's json tags do not have,
+// or -1, and the offset of every card before it. encoding/json names an
+// unknown field but not where it is, and the same name can be valid
+// elsewhere in the file, so the file is walked against the types instead
+// of searched.
+func scan(src string) (unknown int64, cards []int64) {
 	dec := json.NewDecoder(strings.NewReader(src))
 	var walk func(t reflect.Type) int64
 	walk = func(t reflect.Type) int64 {
 		tok, err := dec.Token()
 		if err != nil {
 			return -1
+		}
+		if t == reflect.TypeFor[Card]() {
+			cards = append(cards, dec.InputOffset()-1) // a null decodes to a card too
 		}
 		switch tok {
 		case json.Delim('['):
@@ -109,7 +146,7 @@ func unknownKey(src string) int64 {
 		}
 		return -1
 	}
-	return walk(reflect.TypeFor[Board]())
+	return walk(reflect.TypeFor[Board]()), cards
 }
 
 // field matches a key the way encoding/json does: case-insensitively.
@@ -150,8 +187,7 @@ func Write(b Board) string {
 // value if the client changed it from base, otherwise disk's. Comments are
 // a set per card instead: disk's, plus the client's additions, minus the
 // client's deletions, so neither side's comment is lost to the other's
-// edit. Cards and columns are identified by title.
-// ponytail: a card renamed on either side takes only the renaming side's edits; add hidden ids if that bites.
+// edit. A card's title merges like its notes.
 func Merge(base, client, disk Board) Board {
 	if Write(client) == Write(base) {
 		return disk
@@ -233,8 +269,9 @@ func Merge(base, client, disk Board) Board {
 			return cc
 		}
 		card := dc
-		if inC && inB && cc.Notes != bc.Notes {
-			card.Notes = cc.Notes
+		if inC && inB {
+			card.Title = pick(cc.Title, bc.Title, dc.Title)
+			card.Notes = pick(cc.Notes, bc.Notes, dc.Notes)
 		}
 		card.Comments = mergeComments(bc.Comments, cc.Comments, dc.Comments)
 		return card
@@ -306,17 +343,15 @@ type boardIndex struct {
 	card  map[string]Card
 }
 
-// index keys columns and cards by title, numbering repeats so duplicates
-// stay distinct.
 func index(b Board) boardIndex {
 	ix := boardIndex{title: map[string]string{}, cards: map[string][]string{}, col: map[string]string{}, card: map[string]Card{}}
-	seenCol, seenCard := map[string]int{}, map[string]int{}
+	seenCol := map[string]int{}
 	for _, col := range b.Columns {
 		ck := key(col.Title, seenCol)
 		ix.cols = append(ix.cols, ck)
 		ix.title[ck] = col.Title
 		for _, c := range col.Cards {
-			k := key(c.Title, seenCard)
+			k := c.ID
 			ix.keys = append(ix.keys, k)
 			ix.cards[ck] = append(ix.cards[ck], k)
 			ix.col[k] = ck
