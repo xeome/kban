@@ -4,12 +4,12 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
-	"log"
 	"net/http"
 	"os"
+	"os/user"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 )
@@ -20,14 +20,24 @@ var uiFS, _ = fs.Sub(ui, "ui")
 
 type server struct {
 	path string
+	user string     // the author of comments posted from the browser
 	mu   sync.Mutex // serializes read-merge-write on the file
 
 	subMu sync.Mutex
-	subs  map[chan Board]struct{}
+	subs  map[chan state]struct{}
+}
+
+type state struct {
+	Board *Board `json:"board,omitempty"`
+	Error string `json:"error,omitempty"`
 }
 
 func newServer(path string) *server {
-	return &server{path: path, subs: map[chan Board]struct{}{}}
+	name := "me"
+	if u, err := user.Current(); err == nil {
+		name = u.Username
+	}
+	return &server{path: path, user: name, subs: map[chan state]struct{}{}}
 }
 
 func (s *server) handler() http.Handler {
@@ -40,16 +50,14 @@ func (s *server) handler() http.Handler {
 }
 
 func (s *server) getBoard(w http.ResponseWriter, r *http.Request) {
-	b, err := s.load()
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	writeJSON(w, map[string]any{"file": filepath.Base(s.path), "board": b})
+	st := s.state()
+	writeJSON(w, map[string]any{"file": filepath.Base(s.path), "user": s.user, "board": st.Board, "error": st.Error})
 }
 
 // putBoard takes the board the client last saw and the board it has now,
-// merges against whatever is on disk, and returns the canonical result.
+// and merges against whatever is on disk. A file that does not parse is
+// left alone: overwriting it would replace what the agent wrote with the
+// tab's older view.
 func (s *server) putBoard(w http.ResponseWriter, r *http.Request) {
 	var req struct{ Base, Board Board }
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)).Decode(&req); err != nil {
@@ -60,19 +68,21 @@ func (s *server) putBoard(w http.ResponseWriter, r *http.Request) {
 	defer s.mu.Unlock()
 	disk, err := s.load()
 	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	out := Write(Merge(req.Base, req.Board, disk))
+	if err := s.store(out); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	merged := Parse(Write(Merge(req.Base, clean(req.Board), disk)))
-	if err := s.store(merged); err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	writeJSON(w, merged)
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	io.WriteString(w, out)
 }
 
 func (s *server) events(w http.ResponseWriter, r *http.Request) {
-	ch := make(chan Board, 1)
+	ch := make(chan state, 1)
 	s.subMu.Lock()
 	s.subs[ch] = struct{}{}
 	s.subMu.Unlock()
@@ -88,8 +98,8 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 			return
-		case b := <-ch:
-			data, _ := json.Marshal(b)
+		case st := <-ch:
+			data, _ := json.Marshal(st)
 			fmt.Fprintf(w, "data: %s\n\n", data)
 			w.(http.Flusher).Flush()
 		}
@@ -106,15 +116,11 @@ func (s *server) watch() {
 			continue
 		}
 		last = st
-		b, err := s.load()
-		if err != nil {
-			log.Println(err)
-			continue
-		}
+		now := s.state()
 		s.subMu.Lock()
 		for ch := range s.subs {
 			select {
-			case ch <- b:
+			case ch <- now:
 			default: // tab is behind; it will get the next one
 			}
 		}
@@ -132,50 +138,26 @@ func (s *server) stamp() string {
 
 func (s *server) load() (Board, error) {
 	src, err := os.ReadFile(s.path)
-	return Parse(string(src)), err
+	if err != nil {
+		return Board{}, err
+	}
+	return Parse(string(src))
 }
 
-func (s *server) store(b Board) error {
+func (s *server) state() state {
+	b, err := s.load()
+	if err != nil {
+		return state{Error: err.Error()}
+	}
+	return state{Board: &b}
+}
+
+func (s *server) store(src string) error {
 	tmp := s.path + ".kban~"
-	if err := os.WriteFile(tmp, []byte(Write(b)), 0o644); err != nil {
+	if err := os.WriteFile(tmp, []byte(src), 0o644); err != nil {
 		return err
 	}
 	return os.Rename(tmp, s.path)
-}
-
-// clean strips what the file format cannot hold: newlines in titles and
-// trailing whitespace. Everything else is the user's to keep.
-func clean(b Board) Board {
-	b.Prelude = note(b.Prelude)
-	for i := range b.Columns {
-		c := &b.Columns[i]
-		c.Title = oneLine(c.Title)
-		for j := range c.Cards {
-			card := &c.Cards[j]
-			card.Title = oneLine(card.Title)
-			lines := strings.Split(strings.ReplaceAll(card.Body, "\r\n", "\n"), "\n")
-			for k := range lines {
-				lines[k] = strings.TrimRight(lines[k], " \t")
-			}
-			card.Body = strings.Trim(strings.Join(lines, "\n"), "\n")
-		}
-	}
-	return b
-}
-
-func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
-
-// note keeps the text above the board from restructuring the file: a line
-// that would parse as a heading is indented, so it stays a note.
-func note(s string) string {
-	lines := strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n")
-	for i, l := range lines {
-		if headingRe.MatchString(l) {
-			l = " " + l
-		}
-		lines[i] = strings.TrimRight(l, " \t")
-	}
-	return strings.Trim(strings.Join(lines, "\n"), "\n")
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

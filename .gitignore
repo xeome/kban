@@ -1,3 +1,4 @@
 /kban
 *.kban~
 /TODO.md
+/TODO.json

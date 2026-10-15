@@ -1,6 +1,8 @@
 # kban
 
-A markdown file as a kanban board, served on localhost.
+A JSON file as a kanban board, served on localhost. You work it in a browser
+while agents edit the file; each card carries notes and a comment thread
+between you.
 
 ## Install
 
@@ -12,31 +14,47 @@ Or from a clone, into `$(go env GOPATH)/bin`:
 
 ## Use
 
-    kban board.md            # default: ./TODO.md, created if missing
+    kban [board.json]        # default ./TODO.json, created if missing
 
-Headings are columns, checkbox items are cards, indented lines under a card
-are its notes. Cards in the last column are written as `[x]`. Text above the
-first heading is kept as is and is editable at the top of the page — the place
-for standing instructions to the agents sharing the board.
+Flags: `-p 4177` port (the next free of ten if taken), `-no-open`.
 
-    # Todo
-    - [ ] Write parser
-      first line of notes
-      second line
+## The file
 
-    # Done
-    - [x] Set up repo
+```json
+{
+  "instructions": "Standing instructions for the agents sharing the board",
+  "columns": [
+    {
+      "title": "Todo",
+      "cards": [
+        {
+          "title": "Fix login redirect",
+          "notes": "Bottom line: cookie path was wrong.",
+          "comments": [
+            {
+              "author": "claude",
+              "time": "2026-10-15T14:02:00+03:00",
+              "text": "Fixed on card/login."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
 
-Inside a column only checkbox items and their indented notes are kept; other
-lines are dropped when the board is next saved.
+- Cards and columns are identified by title.
+- `notes` and `comments` may be left out.
+- An agent comments by appending to the card's `comments`, with the time from
+  `date -Iseconds`.
+- Change the file in one step from what is on disk:
+  `jq '...' TODO.json > t && mv t TODO.json`. An agent that edits a copy read
+  earlier overwrites whatever changed meanwhile.
+- Any other field, a syntax error or trailing text makes the file unreadable.
+  The page shows the error with its line, and kban does not write the file
+  until it reads again.
 
-Every edit is written back to the file; edits to the file show up in the
-browser. Concurrent edits are merged card by card, with the browser's change
-winning when both sides touched the same thing.
-
-Click a card to edit it, drag cards and column headers to move them, use the
-Add card and Add column buttons, hover for delete. Keys do the same: arrows or
-hjkl select, Enter edits, n new card, x delete, Shift+arrows move, u undo,
-+ new column.
-
-Flags: `-p 4177` port (next free of ten is used if taken), `-no-open`.
+When you and an agent change the board at once, each card, column and order
+merges separately, and your change wins where both touched the same thing.
+Comments from both sides are kept. `u` undoes only your own last action.
