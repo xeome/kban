@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"slices"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ var commands = map[string]string{
 	"move":    "ID COLUMN",
 	"set":     "ID title|notes TEXT",
 	"comment": "ID TEXT",
+	"init":    "COLUMN...",
 }
 
 // Agents change the board only through these, so every card keeps its id,
@@ -31,6 +33,10 @@ func cli(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if name == "comment" {
 		fl.StringVar(&author, "a", author, "the comment's author")
 	}
+	instructions := ""
+	if name == "init" {
+		fl.StringVar(&instructions, "i", "", "the board's instructions, which agents read first")
+	}
 	fl.Usage = func() {
 		fmt.Fprintf(stderr, "usage: kban %s [flags] %s\nTEXT - reads stdin.\n", name, commands[name])
 		fl.PrintDefaults()
@@ -39,7 +45,7 @@ func cli(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 	a := fl.Args()
-	if n := len(a); n != len(strings.Fields(commands[name])) && !(name == "show" && n == 0) {
+	if n := len(a); n != len(strings.Fields(commands[name])) && !(name == "show" && n == 0) && !(name == "init" && n > 0) {
 		fl.Usage()
 		return 1
 	}
@@ -49,6 +55,18 @@ func cli(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return 2
 		}
 		return 1
+	}
+	if name == "init" {
+		b := Board{Instructions: instructions}
+		for _, title := range a {
+			b.Columns = append(b.Columns, Column{Title: title})
+		}
+		if err := create(*file, b); errors.Is(err, fs.ErrExist) {
+			return fail(fmt.Errorf("%s exists: init only creates a board", *file))
+		} else if err != nil {
+			return fail(err)
+		}
+		return 0
 	}
 	text := ""
 	if name != "show" && name != "move" {

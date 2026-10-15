@@ -48,7 +48,7 @@ func main() {
 	port := flag.Int("p", 4177, "port to listen on (tries the next few if taken)")
 	noOpen := flag.Bool("no-open", false, "do not open a browser")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: kban [flags] [board.json]\n       kban show|add|move|set|comment [-f board.json] ...\n\nA board is a JSON file of columns and cards. Default file: TODO.json\n\n")
+		fmt.Fprintf(os.Stderr, "usage: kban [flags] [board.json]\n       kban show|add|move|set|comment|init [-f board.json] ...\n\nA board is a JSON file of columns and cards. Default file: TODO.json\n\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -67,10 +67,7 @@ func run(path string, port int, browse bool) error {
 	if err != nil {
 		return err
 	}
-	if f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644); err == nil {
-		f.WriteString(Write(starter(filepath.Base(path))))
-		f.Close()
-	} else if !errors.Is(err, fs.ErrExist) {
+	if err := create(path, starter(filepath.Base(path))); err != nil && !errors.Is(err, fs.ErrExist) {
 		return err
 	}
 	ln, port, err := listen(port)

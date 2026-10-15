@@ -119,3 +119,31 @@ func TestCLIUnreadableFile(t *testing.T) {
 		t.Errorf("file was rewritten:\n%s", got)
 	}
 }
+
+func TestCLIInit(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "board.json")
+	code, _, stderr := kban(t, "", "init", "-f", path, "-i", "Conducted", "Todo", "Ready", "Done")
+	want := Board{Instructions: "Conducted", Columns: []Column{{Title: "Todo"}, {Title: "Ready"}, {Title: "Done"}}}
+	if src, _ := os.ReadFile(path); code != 0 || string(src) != Write(want) {
+		t.Fatalf("init = %d %q, file:\n%s\nwant:\n%s", code, stderr, src, Write(want))
+	}
+	if code, _, stderr := kban(t, "", "add", "-f", path, "Ready", "First"); code != 0 {
+		t.Fatalf("add on the new board exited %d: %s", code, stderr)
+	}
+
+	was, _ := os.ReadFile(path)
+	if code, _, stderr := kban(t, "", "init", "-f", path, "Todo"); code != 1 || !strings.Contains(stderr, "exists") {
+		t.Errorf("init on an existing board = %d %q, want 1 naming it", code, stderr)
+	}
+	if got, _ := os.ReadFile(path); !bytes.Equal(got, was) {
+		t.Errorf("init overwrote a board:\n%s", got)
+	}
+	none := filepath.Join(dir, "none.json")
+	if code, _, _ := kban(t, "", "init", "-f", none); code != 1 {
+		t.Errorf("init with no column exited %d, want 1", code)
+	}
+	if _, err := os.Stat(none); err == nil {
+		t.Errorf("init with no column created the file")
+	}
+}

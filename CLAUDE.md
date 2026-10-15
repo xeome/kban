@@ -9,7 +9,7 @@ person and the agents working alongside them.
 
     go test ./...          # everything; ~1s, no bun needed
     go run . board.json    # serve a board (-p port, -no-open)
-    go run . show -f board.json   # the agent commands: show, add, move, set, comment
+    go run . show -f board.json   # the agent commands: show, add, move, set, comment, init
 
     cd web && bun install --frozen-lockfile  # once, for UI work
     bun build.js           # web/src -> ui/app.js; commit both
@@ -21,7 +21,7 @@ person and the agents working alongside them.
 
     board.go    Parse / Write / Merge — the format and the conflict rules
     server.go   HTTP + SSE, file read/write, the 409 on an unreadable file
-    file.go     update: the one way the file is written
+    file.go     update: the one way the file is written; create: a new one
     cli.go      the agent commands
     main.go     flags, port picking, browser opening
     ui/         embedded (go:embed) and served as is; app.js is built, never edited
@@ -52,7 +52,7 @@ person and the agents working alongside them.
 - **The server stores what it merged, unaltered.** The JSON encoder is the
   trust boundary: no text can add structure, so none is escaped or
   normalised on the way in.
-- **Every write goes through `update`,** which is atomic (temp file +
+- **Every write to an existing board goes through `update`,** which is atomic (temp file +
   rename) and conditional: it renames only if the file still holds what it
   read, else it reads and changes it again. So a command and a browser save
   landing at once both keep their change, and a reader never sees half a

@@ -25,6 +25,7 @@ Agents change the board with these, never by editing the file:
     kban move [-f FILE] ID COLUMN            # to the end of COLUMN
     kban set [-f FILE] ID title|notes TEXT
     kban comment [-f FILE] [-a NAME] ID TEXT
+    kban init [-f FILE] [-i TEXT] COLUMN...  # a new board with these columns, no cards
 
 `TEXT` `-` reads stdin. Exit 1 is a usage or lookup error, 2 a file kban
 cannot read; neither writes the file.

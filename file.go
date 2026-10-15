@@ -40,6 +40,18 @@ func update(path string, change func(*Board) error) (string, error) {
 	return "", errors.New("the file kept changing while kban wrote it; nothing written")
 }
 
+func create(path string, b Board) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return err
+	}
+	_, err = f.WriteString(Write(b))
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
+}
+
 // beforeRename lets a test land a write between the read and the rename.
 var beforeRename = func() {}
 
