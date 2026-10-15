@@ -25,34 +25,5 @@
 </footer>
 </div>
 
-<dialog id="card" aria-labelledby="card-title" tabindex="-1" autofocus>
-  <header>
-    <span id="card-where"></span>
-    <button class="icon" id="card-prev" title="Previous card (Ctrl+↑)" aria-label="Previous card"><svg viewBox="0 0 16 16"><path d="M4.5 10l3.5-3.5 3.5 3.5"/></svg></button>
-    <button class="icon" id="card-next" title="Next card (Ctrl+↓)" aria-label="Next card"><svg viewBox="0 0 16 16"><path d="M4.5 6l3.5 3.5 3.5-3.5"/></svg></button>
-    <button class="icon" id="card-close" title="Close (Esc)" aria-label="Close"><svg viewBox="0 0 16 16"><path d="M4.5 4.5l7 7m0-7l-7 7"/></svg></button>
-  </header>
-  <div class="card-body">
-    <div class="card-main">
-      <input id="card-title" placeholder="Title" spellcheck="false" autocomplete="off">
-      <textarea id="card-notes" rows="3" placeholder="Add notes"></textarea>
-      <section class="thread" aria-label="Comments">
-        <h3>Comments <span id="card-count"></span></h3>
-        <ol id="card-comments"></ol>
-        <div class="composer">
-          <textarea id="card-draft" rows="2" placeholder="Write a comment"></textarea>
-          <div class="composer-row">
-            <span class="hint"><kbd>Ctrl</kbd> <kbd>⏎</kbd> to post · <kbd>c</kbd> to write · <kbd>Ctrl</kbd> <kbd>↑↓</kbd> next card</span>
-            <button class="btn primary" id="card-post" disabled>Comment</button>
-          </div>
-        </div>
-      </section>
-    </div>
-    <aside class="card-side">
-      <h3>Column</h3>
-      <div id="card-cols"></div>
-      <button class="btn danger" id="card-delete">Delete card</button>
-    </aside>
-  </div>
-</dialog>
+<dialog id="card" aria-labelledby="card-title" tabindex="-1" autofocus></dialog>
 <script src="app.js"></script>

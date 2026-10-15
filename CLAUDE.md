@@ -7,15 +7,23 @@ person and the agents working alongside them.
 
 ## Commands
 
-    go test ./...          # everything; ~1s
+    go test ./...          # everything; ~1s, no bun needed
     go run . board.json    # serve a board (-p port, -no-open)
+
+    cd web && bun install --frozen-lockfile  # once, for UI work
+    bun build.js           # web/src -> ui/app.js; commit both
+    bun test               # Markdown rendering and what it must never emit
+    go build -o /tmp/kban .. && bun e2e/check.mjs /tmp/kban [step]
+                           # the real binary and UI in headless Chromium
 
 ## Layout
 
     board.go    Parse / Write / Merge — the format and the conflict rules
     server.go   HTTP + SSE, file read/write, the 409 on an unreadable file
     main.go     flags, port picking, browser opening
-    ui/         embedded (go:embed) vanilla JS; no build step, no deps
+    ui/         embedded (go:embed) and served as is; app.js is built, never edited
+    web/src/    the UI source: store.js (state, saving, keys, drag), view.jsx
+                (Preact components), md.js (Markdown for notes and comments)
 
 ## Rules that break things when ignored
 
@@ -46,7 +54,16 @@ person and the agents working alongside them.
 - Changes to the file are picked up by polling, within 500ms.
 - **Render never touches a focused field.** The modal follows its card by
   key (title + repeat number) across every board the server pushes, so an
-  agent's comment lands while you type without moving your caret.
+  agent's comment lands while you type without moving your caret. Every
+  text field Preact owns is a `Field` (view.jsx), which goes uncontrolled
+  while focused; always pass its `value`.
+- **File text becomes markup only through `md()`;** everything else is
+  JSX text. `md()` escapes HTML, renders an image as a link, and shows a
+  link to anything but http(s) or mailto as plain text.
+  An agent's text must never become markup on the user's localhost page.
+- **The committed bundle matches its sources.** `bundle_test.go` hashes
+  web/ the way build.js does and fails when ui/app.js is stale or hand-edited, so
+  `go install` never needs bun.
 
 ## Testing
 
@@ -57,7 +74,8 @@ view — over a real HTTP server and a real temp file.
 Adding a merge or format rule means a case in those tables. Verify a new test
 fails before it passes: break the line it covers, run it, put the line back.
 
-The UI has no automated tests. After touching `ui/`, check by hand: drag a card
-across columns, open one and edit it, comment, `u` to undo, then `cat` the file
-and confirm it says what the screen says. Then append a comment to the open
-card with `jq` while typing in its notes: it appears, the caret stays.
+`web/e2e/check.mjs` drives the real binary in headless Chromium: opening,
+stepping, comments landing while you type, undo, the broken-file banner,
+the notes swap, Markdown, and one drag across columns. It covers no drag
+within a column and no column drag: after touching the UI, do those by
+hand, then `cat` the file and confirm it says what the screen says.

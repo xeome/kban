@@ -152,9 +152,10 @@ main {
   -webkit-box-orient: vertical;
   overflow: hidden;
   margin-top: 3px;
+  max-height: 3lh; /* the clamp does not count lines inside a code block or a table */
   color: var(--dim);
-  white-space: pre-line;
 }
+.card .b a { pointer-events: none; } /* a click on the card opens it */
 .row { display: flex; align-items: flex-start; gap: 8px; }
 .row .t { flex: 1; }
 
@@ -274,15 +275,27 @@ kbd {
 
 /* The negative margin keeps the text aligned with the rest while the
    padding gives the hover fill room. */
-#card-title, #card-notes {
+#card-title, .notes {
   width: calc(100% + 16px);
   margin: 0 -8px;
-  padding: 4px 8px;
-  border-radius: 6px;
 }
+#card-title, #card-notes, .notes .view { padding: 4px 8px; border-radius: 6px; }
 #card-title { font-size: 17px; line-height: 1.35; font-weight: 600; color: var(--bright); }
-#card-notes { margin-top: 6px; min-height: 4.5em; line-height: 1.6; overflow: hidden; }
-#card-title:hover, #card-notes:hover { background: var(--hover); }
+.notes { margin-top: 6px; }
+#card-notes, .notes .view { min-height: 4.5em; line-height: 1.6; }
+#card-notes { overflow: hidden; }
+#card-title:hover, #card-notes:hover, .notes .view:hover { background: var(--hover); }
+
+/* :has(:focus), not :focus-within: a link in the view takes focus on
+   mousedown, and hiding the view then would swallow its click. .held (set
+   by notesBlur) keeps the source shown while a press that blurred it
+   completes its click. */
+.notes { position: relative; }
+.notes .view { display: block; cursor: text; overflow-wrap: anywhere; }
+.notes:has(.view):not(.held) #card-notes:not(:focus) {
+  position: absolute; top: 0; left: 0; opacity: 0; height: 1px !important; min-height: 0; pointer-events: none;
+}
+.notes:is(.held, :has(#card-notes:focus)) .view { display: none; }
 #card-title:focus, #card-notes:focus { background: var(--hover); box-shadow: inset 0 0 0 1px var(--line); }
 
 .thread { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
@@ -304,7 +317,27 @@ kbd {
 .comment-head .x { margin: 0 0 0 auto; }
 .comment:hover .x, .comment:focus-within .x { visibility: visible; }
 @media (hover: none) { .comment .x { visibility: visible; } }
-.comment-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.comment-text { overflow-wrap: anywhere; }
+
+/* Markdown from the file, kept compact so a plain note looks as it did. */
+.md > * { margin: 0 0 6px; }
+.md > :last-child { margin-bottom: 0; }
+.md :is(h1, h2, h3, h4, h5, h6) { font-size: inherit; font-weight: 600; color: var(--bright); }
+.md :is(ul, ol) { padding-left: 20px; }
+.md ul { list-style: disc; }
+.md li > p { margin: 0; }
+.md blockquote { margin-left: 0; padding-left: 10px; border-left: 2px solid var(--line); color: var(--dim); }
+.md a { color: inherit; text-decoration-color: var(--dim); text-underline-offset: 2px; }
+.md a:hover { color: var(--bright); }
+.md hr { border: 0; border-top: 1px solid var(--line); }
+.md code { padding: 1px 4px; border-radius: 4px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line);
+           font: .92em var(--mono); }
+.md pre { padding: 8px 10px; border-radius: 6px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line);
+          overflow-x: auto; line-height: 1.45; }
+.md pre code { padding: 0; background: none; box-shadow: none; }
+.md table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
+.md :is(th, td) { padding: 3px 8px; border: 1px solid var(--line); text-align: left; }
+.md th { background: var(--card); font-weight: 500; color: var(--bright); }
 
 .composer {
   border: 1px solid var(--line);
