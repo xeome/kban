@@ -114,7 +114,9 @@ export function listen() {
   const es = new EventSource('/api/events');
   es.onmessage = (e) => receive(JSON.parse(e.data));
   es.onopen = () => { status('saved'); load(); };
-  es.onerror = () => status('offline');
+  // A browser may give up on the stream for good: Firefox does when it drops
+  // a silent one after a network change. So the page reconnects itself.
+  es.onerror = () => { status('offline'); es.close(); setTimeout(listen, 2000); };
 }
 
 function status(state, text) {

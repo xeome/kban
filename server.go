@@ -103,7 +103,10 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 	}()
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-store")
-	w.(http.Flusher).Flush() // open the stream now: the client waits for headers before it calls itself connected
+	// Firefox fires open on the first body bytes, not the headers, and the
+	// page reloads the board on open.
+	io.WriteString(w, ":\n\n")
+	w.(http.Flusher).Flush()
 	for {
 		select {
 		case <-r.Context().Done():

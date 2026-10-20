@@ -296,6 +296,26 @@ func TestAgentEditReachesOpenTabs(t *testing.T) {
 	}
 }
 
+// Firefox calls a stream open, and the page reloads the board, only once
+// its first bytes arrive. A tab that reconnects while the file is quiet
+// would say offline until the next change.
+func TestStreamSendsOnConnect(t *testing.T) {
+	f := serve(t)
+	c := &http.Client{Timeout: 2 * time.Second} // a silent stream fails the test instead of hanging it
+	r, err := c.Get(f.URL + "/api/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Body.Close()
+	line, err := bufio.NewReader(r.Body).ReadString('\n')
+	if err != nil {
+		t.Fatalf("the stream sent nothing on connect, with the file unchanged: %v", err)
+	}
+	if !strings.HasPrefix(line, ":") {
+		t.Fatalf("first line %q, want a comment, which EventSource does not deliver as a message", line)
+	}
+}
+
 // The browser keeps editing its own copy between saves, so the base it
 // sends is what it typed, not what the server stored. If the server
 // rewrites anything it stores, that base stops matching and an edit

@@ -2,6 +2,7 @@
 // usage: bun web/e2e/check.mjs <kban binary> [only-step]
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -99,9 +100,10 @@ async function fresh(port, todo) {
   const f = path.join(dir, `b${port}.json`);
   fs.writeFileSync(f, JSON.stringify(board(todo), null, 2));
   const url = await server(f, port);
+  const k = procs.at(-1);
   const p = await tab(url);
   await p.until(`document.querySelectorAll('.card').length === ${todo.length}`);
-  return { f, p };
+  return { f, p, k };
 }
 const run = (name) => !only || only === name;
 const pages = async () => (await (await fetch('http://127.0.0.1:9339/json/list')).json()).filter((t) => t.type === 'page').length;
@@ -339,6 +341,34 @@ if (run('broken')) {
   check('nothing was sent before the first board, and the fixed file is unchanged',
     (await p.ev('window.__puts')) === 0 && fs.readFileSync(f, 'utf8') === fixed, `puts=${await p.ev('window.__puts')} same=${fs.readFileSync(f, 'utf8') === fixed} ${JSON.stringify(await p.ev('window.__log'))}`);
   check('the banner clears once the file reads', await p.ev(`document.querySelector('#problem').hidden`));
+}
+
+// --- a stream the browser gave up on is reopened -----------------------------
+// Firefox gives up on a silent stream it drops after a network change.
+// Chromium gives up when a reconnect is answered with an error, as here.
+if (run('reopen')) {
+  const { f, p, k } = await fresh(4314, ['A']);
+  // Wrap EventSource before the page's script runs, so its first stream is counted too.
+  await p.send('Page.enable'); // without it the script below never runs
+  await p.send('Page.addScriptToEvaluateOnNewDocument', { source: 'window.__es = []; window.EventSource = class extends EventSource { constructor(u) { super(u); __es.push(this); } };' });
+  await p.send('Page.reload');
+  await p.until(`window.__es?.length === 1 && document.querySelectorAll('.card').length === 1`);
+  const live = () => p.ev(`__es.filter((e) => e.readyState !== EventSource.CLOSED).length`);
+  k.kill('SIGKILL');
+  await new Promise((r) => k.once('exit', r));
+  let asked = 0;
+  const standIn = http.createServer((req, res) => { if (req.url === '/api/events') asked++; res.writeHead(503, { Connection: 'close' }).end(); });
+  await new Promise((r) => standIn.listen(4314, '127.0.0.1', r));
+  for (let i = 0; i < 100 && !asked; i++) await sleep(100);
+  await sleep(500);
+  await new Promise((r) => standIn.close(r));
+  await server(f, 4314);
+  agent(f, (b) => b.columns[0].cards.push({ id: 'id-B', title: 'B' }));
+  const arrived = asked > 0 && await p.until(`document.querySelectorAll('.card').length === 2`, 8000) >= 0;
+  await sleep(2500); // past the page's 2s reopen, so a stream it left open has opened too
+  const n = await live();
+  check('after the browser gave up on the stream, an agent\'s card still reaches the page, over one stream',
+    arrived && n === 1, `stand-in asked ${asked} times, ${n} live streams`);
 }
 
 // --- Markdown in notes and comments, driven by mouse and keys ------------------
