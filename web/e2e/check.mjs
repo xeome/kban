@@ -502,7 +502,7 @@ if (run('drag')) {
   for (let k = 0; k < 8 && !(await p.ev(`document.activeElement.id === 'card-notes'`)); k++) await p.key('Tab');
   await p.key('Escape');
   check('after a drag, leaving the notes by keyboard shows them rendered',
-    await p.ev(`document.activeElement.id !== 'card-notes' && ${shown(notesView)} && !document.querySelector('.notes.held')`),
+    await p.until(`document.activeElement.id !== 'card-notes' && ${shown(notesView)} && !document.querySelector('.notes.held')`, 1000) >= 0, // past the dialog's fade-in
     await p.ev(`document.activeElement.id + ' held=' + !!document.querySelector('.notes.held')`));
 }
 
