@@ -36,6 +36,7 @@ function loaded({ file, user, board, error }) {
   $('#file').textContent = file;
   document.title = file;
   receive({ board, error });
+  if (!S.dirty && !S.inflight) status('saved'); // else the save still owed says how it went
   refill();
 }
 
@@ -119,7 +120,6 @@ export function listen() {
   // stream too, unless onerror already reopens it. An error while showing
   // it is a bug, not a lost stream, so it stays uncaught.
   es.onopen = () => {
-    status('saved');
     fetch('/api/board').then((r) => r.json()).then(loaded, () => es.readyState === EventSource.OPEN && lost());
   };
   es.onerror = lost;

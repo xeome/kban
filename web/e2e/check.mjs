@@ -417,6 +417,33 @@ if (run('loadlost')) {
   check('a stream lost while its board loaded comes back once', held !== null && lostFirst && shown && n === 1, `${n} live streams`);
 }
 
+// --- the stream reopens while a save keeps failing: never "saved" ------------
+if (run('unsaved')) {
+  const { f, p, k } = await fresh(4317, ['A', 'B']);
+  await streams(p);
+  await p.send('Page.reload');
+  await p.until(`window.__es?.length === 1 && document.querySelectorAll('.card').length === 2`);
+  p.on((m) => {
+    if (m.method !== 'Fetch.requestPaused') return;
+    const { requestId, request } = m.params;
+    if (request.method === 'PUT') p.send('Fetch.failRequest', { requestId, errorReason: 'ConnectionRefused' });
+    else p.send('Fetch.continueRequest', { requestId });
+  });
+  await p.send('Fetch.enable', { patterns: [{ urlPattern: '*/api/board' }] });
+  // Every status shown, so a "saved" between two failed saves is caught.
+  await p.ev(`window.__said = []; new MutationObserver(() => __said.push(document.querySelector('#status').textContent)).observe(document.querySelector('#status'), { childList: true, characterData: true, subtree: true }); 0`);
+  await p.ev(`document.querySelectorAll('.card .x')[0].click()`);
+  await p.until(`document.querySelector('#status').dataset.state === 'error'`);
+  k.kill('SIGKILL');
+  await new Promise((r) => k.once('exit', r));
+  await server(f, 4317);
+  const reopened = await p.until(`__es.length > 1 && __es.at(-1).readyState === EventSource.OPEN`, 6000) >= 0;
+  await sleep(500);
+  const said = await p.ev(`__said`);
+  check('a save that has not landed is never shown as saved',
+    reopened && !said.includes('saved') && !!card(read(f), 'A'), JSON.stringify(said));
+}
+
 // --- Markdown in notes and comments, driven by mouse and keys ------------------
 if (run('md')) {
   const { f, p } = await fresh(4308, ['A', 'B']);
