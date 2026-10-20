@@ -25,7 +25,12 @@ type fixture struct {
 
 func serve(t *testing.T) *fixture {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "TODO.json")
+	return serveIn(t, t.TempDir())
+}
+
+func serveIn(t *testing.T, dir string) *fixture {
+	t.Helper()
+	path := filepath.Join(dir, "TODO.json")
 	if err := os.WriteFile(path, []byte(Write(starter("TODO.json"))), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -59,9 +64,30 @@ func (f *fixture) get() Board {
 	return *st.Board
 }
 
+// id is what a tab sends back on every save: the board's identity, as the
+// GET that loaded it gave it.
+func (f *fixture) id() string {
+	f.t.Helper()
+	r, err := http.Get(f.URL + "/api/board")
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	defer r.Body.Close()
+	var got map[string]any
+	json.NewDecoder(r.Body).Decode(&got)
+	id, _ := got["fileID"].(string)
+	return id
+}
+
 func (f *fixture) send(base, board Board) *http.Response {
 	f.t.Helper()
-	body, _ := json.Marshal(map[string]Board{"base": base, "board": board})
+	return f.sendAs(f.id(), base, board)
+}
+
+// sendAs is a save from a tab that loaded the board identified as id.
+func (f *fixture) sendAs(id string, base, board Board) *http.Response {
+	f.t.Helper()
+	body, _ := json.Marshal(map[string]any{"fileID": id, "base": base, "board": board})
 	req, _ := http.NewRequest("PUT", f.URL+"/api/board", bytes.NewReader(body))
 	r, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -160,6 +186,62 @@ func TestPutRefusesIDless(t *testing.T) {
 	if got, _ := os.ReadFile(f.path); !bytes.Equal(got, was) {
 		t.Errorf("file was rewritten:\n%s", got)
 	}
+}
+
+// A tab keeps its undo steps and a failed save across a reconnect. If
+// another kban took the port meanwhile, they belong to another board.
+func TestPutRefusesAnotherBoard(t *testing.T) {
+	f, other := serve(t), serve(t)
+	base := f.get()
+	was, _ := os.ReadFile(f.path)
+	r := f.sendAs(other.id(), base, add(base, 1, "card from another board"))
+	body, _ := io.ReadAll(r.Body)
+	r.Body.Close()
+	if r.StatusCode != http.StatusPreconditionFailed || !strings.Contains(string(body), f.path) {
+		t.Errorf("PUT from a tab on another board: %s %s, want 412 naming %s", r.Status, body, f.path)
+	}
+	if got, _ := os.ReadFile(f.path); !bytes.Equal(got, was) {
+		t.Errorf("file was rewritten:\n%s", got)
+	}
+}
+
+// A tab still running the page from before saves named their board, or one
+// whose board has not loaded yet, has only seen this kban.
+func TestPutAcceptsTabWithoutID(t *testing.T) {
+	f := serve(t)
+	base := f.get()
+	if r := f.sendAs("", base, add(base, 1, "card")); r.StatusCode != 200 {
+		t.Errorf("PUT naming no board: %s, want 200", r.Status)
+	}
+}
+
+// The same file is the same board however its path is spelled, so a tab
+// keeps its edits when kban restarts on it from a symlinked directory.
+func TestSymlinkedPathIsTheSameBoard(t *testing.T) {
+	f := serve(t)
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(filepath.Dir(f.path), link); err != nil {
+		t.Skip(err)
+	}
+	s := newServer(filepath.Join(link, "TODO.json"))
+	ts := httptest.NewServer(s.handler())
+	t.Cleanup(ts.Close)
+	viaLink := &fixture{ts, filepath.Join(link, "TODO.json"), t}
+	base := f.get()
+	if r := f.sendAs(viaLink.id(), base, add(base, 1, "card")); r.StatusCode != 200 {
+		t.Errorf("PUT from a tab that loaded the same file through a symlink: %s, want 200", r.Status)
+	}
+}
+
+// A path JSON cannot carry intact still names its board.
+func TestSaveUnderNonUTF8Path(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "caf\xe9")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Skip(err) // a filesystem that takes only UTF-8 names
+	}
+	f := serveIn(t, dir)
+	base := f.get()
+	f.put(base, add(base, 1, "card"))
 }
 
 // A write lands between a writer's read and its rename. hook makes it land

@@ -444,6 +444,27 @@ if (run('unsaved')) {
     reopened && !said.includes('saved') && !!card(read(f), 'A'), JSON.stringify(said));
 }
 
+// --- another kban takes the port: the tab reloads onto its board -------------
+// Its undo steps and unsaved edits are for the board it showed before.
+if (run('port')) {
+  const { f, p, k } = await fresh(4318, ['A1', 'A2']);
+  const other = path.join(dir, 'other.json');
+  const was = JSON.stringify(board(['B1']), null, 2);
+  fs.writeFileSync(other, was);
+  await p.ev(`document.querySelectorAll('.card .x')[0].click()`);
+  const undoable = await saved(p) >= 0 && !card(read(f), 'A1'); // else u has nothing to undo
+  await p.ev(`window.__before = true`);
+  k.kill('SIGKILL');
+  await new Promise((r) => k.once('exit', r));
+  await server(other, 4318);
+  const shown = await p.until(`[...document.querySelectorAll('.card .t')].map((e) => e.textContent).join() === 'B1'`, 8000) >= 0;
+  const reloaded = await p.ev(`!window.__before`);
+  await p.key('u');
+  await sleep(1000);
+  check('after another kban took the port, the tab reloads and its undo leaves that board alone',
+    undoable && shown && reloaded && fs.readFileSync(other, 'utf8') === was, `undoable=${undoable} shown=${shown} reloaded=${reloaded} other=${JSON.stringify(read(other).columns[0].cards.map((c) => c.title))}`);
+}
+
 // --- Markdown in notes and comments, driven by mouse and keys ------------------
 if (run('md')) {
   const { f, p } = await fresh(4308, ['A', 'B']);

@@ -13,6 +13,7 @@ export const S = {
   base: null,             // null until the first board: an edit saved against no base replaces every column
   user: '',               // author of comments posted here
   file: '',
+  fileID: '',             // the file this tab shows; every save names it
   sel: { c: 0, i: -1 },   // i === -1 selects the column header
   edit: null,             // { c } while a column title is edited
   editSnap: null,
@@ -30,7 +31,11 @@ export const S = {
 
 // --- server ----------------------------------------------------------------
 
-function loaded({ file, user, board, error }) {
+function loaded({ file, fileID, user, board, error }) {
+  // Another kban took this port. This tab's undo steps and unsaved edits are
+  // for the board it showed, so it starts over on the one served now.
+  if (S.fileID && fileID !== S.fileID) return location.reload();
+  S.fileID = fileID;
   S.file = file;
   S.user = user;
   $('#file').textContent = file;
@@ -72,7 +77,7 @@ function schedule() {
 }
 
 async function send(base, board) {
-  const r = await fetch('/api/board', { method: 'PUT', body: JSON.stringify({ base, board }) });
+  const r = await fetch('/api/board', { method: 'PUT', body: JSON.stringify({ fileID: S.fileID, base, board }) });
   if (r.status === 409) throw Object.assign(new Error(await r.text()), { unreadable: true });
   if (!r.ok) throw new Error(await r.text());
   return r.json();

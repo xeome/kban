@@ -43,10 +43,13 @@ person and the agents working alongside them.
   case-insensitively.
 - **`Parse` and `Write` must round-trip.** `Write(Parse(s)) == s` for any file
   kban itself produced.
-- **The browser never merges.** It sends `{base, board}`; the server merges
-  against disk and returns the file it wrote. Keep it that way — two merge
-  implementations will disagree. Undo is the same request with the step's
-  `{after, before}`. A modal field's step is built when the field is left:
+- **The browser never merges.** It sends `{fileID, base, board}`; the server
+  merges against disk and returns the file it wrote. Keep it that way — two
+  merge implementations will disagree. Undo is the same request with the
+  step's `{after, before}`. `fileID` names the file the tab loaded: the
+  server refuses another (412), and a tab reloads when its port serves
+  another file, since another kban on the port would otherwise get this
+  board's undo steps. A modal field's step is built when the field is left:
   before is the board then with only that field set back, so undo never
   reverts what an agent wrote while you typed.
 - **The server stores what it merged, unaltered.** The JSON encoder is the
@@ -57,7 +60,10 @@ person and the agents working alongside them.
   read, else it reads and changes it again. So a command and a browser save
   landing at once both keep their change, and a reader never sees half a
   board.
-- Changes to the file are picked up by polling, within 500ms.
+- Changes to the file are picked up by polling, within 500ms, and pushed
+  over `/api/events`. The page reopens that stream itself after any error
+  and loads the board on every open, because Firefox gives up on a silent
+  stream after a network change.
 - **Render never touches a focused field.** The modal follows its card by
   id across every board the server pushes, so an agent's comment or rename
   lands while you type without moving your caret. Every
@@ -83,6 +89,8 @@ fails before it passes: break the line it covers, run it, put the line back.
 
 `web/e2e/check.mjs` drives the real binary in headless Chromium: opening,
 stepping, comments landing while you type, undo, the broken-file banner,
-the notes swap, Markdown, and one drag across columns. It covers no drag
+the stream reopening after the browser gives up on it or the board fails
+to load, a save that never landed, another kban taking the port, the notes
+swap, Markdown, and one drag across columns. It covers no drag
 within a column and no column drag: after touching the UI, do those by
 hand, then `cat` the file and confirm it says what the screen says.

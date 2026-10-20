@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,9 +22,10 @@ var ui embed.FS
 var uiFS, _ = fs.Sub(ui, "ui")
 
 type server struct {
-	path string
-	user string     // the author of comments posted from the browser
-	mu   sync.Mutex // serializes this server's own writes; update guards against everyone else's
+	path   string
+	fileID string     // names the file to tabs: see fileID
+	user   string     // the author of comments posted from the browser
+	mu     sync.Mutex // serializes this server's own writes; update guards against everyone else's
 
 	subMu sync.Mutex
 	subs  map[chan state]struct{}
@@ -38,7 +41,18 @@ func newServer(path string) *server {
 	if u, err := user.Current(); err == nil {
 		name = u.Username
 	}
-	return &server{path: path, user: name, subs: map[chan state]struct{}{}}
+	return &server{path: path, fileID: fileID(path), user: name, subs: map[chan state]struct{}{}}
+}
+
+// fileID names a board's file the same way across kban restarts, however
+// its path was spelled. A hash, because JSON mangles a path that is not
+// UTF-8, and the tab sends back what JSON gave it.
+func fileID(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+	sum := sha256.Sum256([]byte(path))
+	return hex.EncodeToString(sum[:8])
 }
 
 func (s *server) handler() http.Handler {
@@ -53,7 +67,7 @@ func (s *server) handler() http.Handler {
 
 func (s *server) getBoard(w http.ResponseWriter, r *http.Request) {
 	st := s.state()
-	writeJSON(w, map[string]any{"file": filepath.Base(s.path), "user": s.user, "board": st.Board, "error": st.Error})
+	writeJSON(w, map[string]any{"file": filepath.Base(s.path), "fileID": s.fileID, "user": s.user, "board": st.Board, "error": st.Error})
 }
 
 // putBoard takes the board the client last saw and the board it has now,
@@ -61,9 +75,18 @@ func (s *server) getBoard(w http.ResponseWriter, r *http.Request) {
 // left alone: overwriting it would replace what the agent wrote with the
 // tab's older view.
 func (s *server) putBoard(w http.ResponseWriter, r *http.Request) {
-	var req struct{ Base, Board Board }
+	var req struct {
+		FileID      string // the board the tab loaded; "" from an older page, or before its first board
+		Base, Board Board
+	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)).Decode(&req); err != nil {
 		http.Error(w, err.Error(), 400)
+		return
+	}
+	// A tab keeps its undo steps and a failed save across a reconnect, and
+	// another kban may have taken this port meanwhile.
+	if req.FileID != "" && req.FileID != s.fileID {
+		http.Error(w, "this port now serves "+s.path+": reload this page", http.StatusPreconditionFailed)
 		return
 	}
 	for _, b := range []Board{req.Base, req.Board} {
