@@ -1,8 +1,8 @@
 import { useRef } from 'preact/hooks';
 import { md } from './md.js';
 import {
-  S, addCard, addColumn, closeCard, deleteComment, deleteOpenCard, draftInput, editKeys, find, leaveEdit, moveOpenCard, notesBlur, notesFocus, notesInput, openCard, post, remove, startEdit, step, titleBlur,
-  titleFocus, when,
+  S, addCard, addColumn, addNew, addingColumn, closeCard, colKey, deleteComment, deleteOpenCard, discardNew, draftInput, editKeys, find, leaveEdit, moveOpenCard, newNotesInput, newTitleInput, notesBlur, notesFocus,
+  notesInput, openCard, post, remove, startEdit, step, titleBlur, titleFocus, when,
 } from './store.js';
 
 const X = () => <svg viewBox="0 0 16 16"><path d="M4.5 4.5l7 7m0-7l-7 7" /></svg>;
@@ -24,21 +24,13 @@ function Field({ tag: Tag = 'input', value, ...props }) {
 // The only place file text becomes markup.
 const Md = ({ src, face, ...props }) => <div {...props} dangerouslySetInnerHTML={{ __html: md(src, face) }} />;
 
-const isEditing = (c, i) => S.edit && S.edit.c === c && S.edit.i === i;
+const isEditing = (c) => S.edit?.c === c;
 
 function DeleteButton({ at }) {
   return <button class="x" tabIndex={-1} title="Delete" onClick={(e) => { e.stopPropagation(); remove(at); }}><X /></button>;
 }
 
 function Card({ card, c, i }) {
-  if (isEditing(c, i)) {
-    return (
-      <article class="card edit sel" onFocusOut={leaveEdit}>
-        <Field placeholder="Title, then Enter" value={card.title} onKeyDown={editKeys}
-          onInput={(e) => { card.title = e.currentTarget.value; }} />
-      </article>
-    );
-  }
   const sel = S.sel.c === c && S.sel.i === i;
   const dragging = S.drag?.kind === 'card' && S.drag.from.c === c && S.drag.from.i === i;
   const n = (card.comments || []).length;
@@ -55,7 +47,7 @@ function Card({ card, c, i }) {
 function Column({ col, c }) {
   const sel = S.sel.c === c && S.sel.i === -1;
   const dragging = S.drag?.kind === 'col' && S.drag.from === c;
-  const head = isEditing(c, undefined)
+  const head = isEditing(c)
     ? (
       <div class="col-head sel" onFocusOut={leaveEdit}>
         <Field placeholder="Column" value={col.title} onKeyDown={editKeys} onInput={(e) => { col.title = e.currentTarget.value; }} />
@@ -75,11 +67,6 @@ function Column({ col, c }) {
       <button class="add-card" onClick={() => addCard(c, col.cards.length)}><Plus />Add card</button>
     </section>
   );
-}
-
-function colKey(c) {
-  const title = S.board.columns[c].title;
-  return `${S.board.columns.slice(0, c).filter((col) => col.title === title).length}\u0000${title}`;
 }
 
 export function Board() {
@@ -104,7 +91,34 @@ function Notes({ notes }) {
   );
 }
 
+function NewCard() {
+  const { title, notes } = S.newCard;
+  const c = addingColumn();
+  return (
+    <>
+      <header>
+        <span id="card-where">{`New card · ${c < 0 ? 'its column was renamed or removed: close, and add it from another' : S.board.columns[c].title || 'Untitled'}`}</span>
+        <button class="icon" id="card-close" title="Close, keeping the draft (Esc)" aria-label="Close" onClick={closeCard}><X /></button>
+      </header>
+      <div class="card-body new">
+        <div class="card-main">
+          <Field id="card-title" placeholder="Title" spellcheck={false} autocomplete="off" value={title} onInput={newTitleInput} />
+          <div class="notes">
+            <Field tag="textarea" id="card-notes" aria-label="Notes" rows={3} placeholder="Add notes" value={notes} onInput={newNotesInput} />
+          </div>
+          <div class="new-row">
+            <span class="hint"><kbd>Ctrl</kbd> <kbd>⏎</kbd> to add · <kbd>Esc</kbd> keeps the draft</span>
+            <button class="btn" id="card-discard" onClick={discardNew}>Discard</button>
+            <button class="btn primary" id="card-add" disabled={!title.trim() || c < 0} onClick={addNew}>Add card</button>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
 export function CardBody() {
+  if (S.adding) return <NewCard />;
   const at = S.open && find(S.open);
   if (!at) return null;
   const { c, i, card } = at;

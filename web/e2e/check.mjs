@@ -213,7 +213,7 @@ if (run('ids')) {
   const all = () => read(f).columns.flatMap((c) => c.cards);
   await p.ev(`document.activeElement.blur()`);
   await p.key('ArrowDown'); // select A
-  for (let k = 0; k < 20; k++) { await p.key('n'); await p.type(`new ${k}`); await p.key('Enter'); }
+  for (let k = 0; k < 20; k++) { await p.key('n'); await p.type(`new ${k}`); await p.key('Enter', { ctrl: true }); }
   await saved(p);
   const ids = all().map((c) => c.id);
   check('20 cards added in a row land in the file, each with its own id',
@@ -236,6 +236,36 @@ if (run('ids')) {
   await sleep(200);
   check('undoing both puts back every card, once each, in its place', JSON.stringify(all().map((c) => c.id)) === JSON.stringify(ids) && all()[6]?.title === 'new 5',
     JSON.stringify(all().map((c) => [c.id, c.title])));
+}
+
+// --- a new card reaches the file whole, title and notes together ----------------
+if (run('add')) {
+  const { f, p } = await fresh(4313, ['A']);
+  const titles = () => read(f).columns.flatMap((c) => c.cards.map((x) => x.title));
+  await p.click('.col[data-c="1"] .add-card'); // Doing
+  check('Add card opens the modal with its title field focused',
+    await p.until(`document.querySelector('#card').open && document.activeElement?.id === 'card-title'`, 1000) >= 0);
+  await p.type('Spec first');
+  await p.key('Enter');
+  await p.type('the details');
+  await sleep(800);
+  check('nothing reaches the file while the new card is drafted, Enter on its title included', JSON.stringify(titles()) === '["A"]', JSON.stringify(titles()));
+  await p.key('Escape');
+  await p.key('Escape');
+  await p.until(`!document.querySelector('#card').open`, 1000);
+  await sleep(500);
+  check('closing the modal writes nothing', JSON.stringify(titles()) === '["A"]', JSON.stringify(titles()));
+  await p.click('.col[data-c="1"] .add-card');
+  check('the closed draft comes back on the next Add card',
+    await p.until(`document.querySelector('#card-title')?.value === 'Spec first' && document.querySelector('#card-notes')?.value === 'the details'`, 1000) >= 0);
+  agent(f, (b) => b.columns.unshift({ title: 'Backlog', cards: [] }));
+  await p.until(`document.querySelectorAll('.col').length === 4`);
+  await p.key('Enter', { ctrl: true });
+  await saved(p);
+  const doing = read(f).columns.find((c) => c.title === 'Doing').cards;
+  check('Ctrl+Enter writes the card with its notes, to the column it was opened in after an agent added one before it',
+    doing.length === 1 && doing[0].title === 'Spec first' && doing[0].notes === 'the details' && !!doing[0].id && doing[0].id !== 'id-A'
+      && await p.ev(`!document.querySelector('#card').open`), JSON.stringify(read(f).columns));
 }
 
 // --- u reverts only my last action --------------------------------------

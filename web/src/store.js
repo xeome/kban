@@ -14,8 +14,10 @@ export const S = {
   user: '',               // author of comments posted here
   file: '',
   sel: { c: 0, i: -1 },   // i === -1 selects the column header
-  edit: null,             // { c, i } for a new card's title, { c } for a column title
+  edit: null,             // { c } while a column title is edited
   editSnap: null,
+  adding: null,           // { key, i } while the modal drafts a new card for column colKey key, at i
+  newCard: { title: '', notes: '' }, // the draft, kept when the modal closes without adding it
   undo: [],               // { before, after } board steps
   dirty: false,
   inflight: false,
@@ -228,13 +230,61 @@ function clampSel() {
   S.sel.i = Math.max(-1, Math.min(S.sel.i, cols.length ? cols[S.sel.c].cards.length - 1 : -1));
 }
 
+// A column is identified by its title, repeats numbered by position: the
+// key the server merges columns by.
+export function colKey(c) {
+  const title = S.board.columns[c].title;
+  return `${S.board.columns.slice(0, c).filter((col) => col.title === title).length}\u0000${title}`;
+}
+
+// A new card is drafted in the modal, outside the board, and reaches the
+// file whole on Add: an agent watching the file never sees it half-written.
 export function addCard(c, i) {
-  if (!S.board.columns.length) return;
+  if (!S.base || !S.board.columns.length) return;
+  S.adding = { key: colKey(c), i };
+  render();
+  dialog.showModal();
+  grow($('#card-notes'));
+  $('#card-title').focus();
+}
+
+// -1 once an agent renamed or removed it.
+export function addingColumn() {
+  return S.board.columns.findIndex((_, j) => colKey(j) === S.adding.key);
+}
+
+export function addNew() {
+  const { title, notes } = S.newCard;
+  if (!S.adding) return;
+  if (!title.trim()) return $('#card-title').focus();
+  const c = addingColumn();
+  if (c < 0) return;
   const id = S.ids.shift();
   refill();
   if (!id) return status('error', 'kban has not sent card ids yet; try again');
+  const i = Math.min(S.adding.i, S.board.columns[c].cards.length);
+  const card = { id, title };
+  if (notes.trim()) card.notes = notes;
+  S.newCard = { title: '', notes: '' };
+  S.adding = null;
+  dialog.close();
   S.sel = { c, i };
-  startEdit({ c, i }, (cols) => cols[c].cards.splice(i, 0, { id, title: '' }));
+  commit((cols) => cols[c].cards.splice(i, 0, card));
+}
+
+export function discardNew() {
+  S.newCard = { title: '', notes: '' };
+  closeCard();
+}
+
+export function newTitleInput(e) {
+  S.newCard.title = e.currentTarget.value;
+  render(); // the add button follows the title
+}
+
+export function newNotesInput(e) {
+  S.newCard.notes = e.currentTarget.value;
+  grow(e.currentTarget);
 }
 
 export function addColumn(at) {
@@ -266,7 +316,7 @@ function moveColumn(from, to) {
   render();
 }
 
-// Inline editing (a new card's title, a column title) writes straight into
+// Inline editing (a column title) writes straight into
 // S.board from input events, so no render happens mid-edit. Esc and Enter
 // both close; `u` is the way back.
 export function startEdit(target, create) {
@@ -279,16 +329,12 @@ export function startEdit(target, create) {
 
 function endEdit() {
   if (!S.edit) return;
-  const { c, i } = S.edit;
+  const { c } = S.edit;
   S.edit = null;
   const col = S.board.columns[c];
-  if (i === undefined) {
-    if (!col.title.trim()) {
-      if (col.cards.length) col.title = 'Untitled';
-      else S.board.columns.splice(c, 1);
-    }
-  } else if (!col.cards[i].title.trim()) {
-    col.cards.splice(i, 1);
+  if (!col.title.trim()) {
+    if (col.cards.length) col.title = 'Untitled';
+    else S.board.columns.splice(c, 1);
   }
   if (!same(S.board, S.editSnap)) remember({ before: S.editSnap, after: clone(S.board) });
   clampSel();
@@ -448,6 +494,7 @@ dialog.addEventListener('close', () => {
   const at = find(S.open);
   if (at) S.sel = { c: at.c, i: at.i };
   S.open = null;
+  S.adding = null;
   render();
 });
 
@@ -467,13 +514,19 @@ function cardKeys(e) {
   if (mod && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
     e.preventDefault();
     step(e.key === 'ArrowUp' ? -1 : 1);
+  } else if (mod && e.key === 'Enter' && S.adding) {
+    e.preventDefault();
+    addNew();
   } else if (mod && e.key === 'Enter' && e.target.id === 'card-draft') {
     e.preventDefault();
     post();
+  } else if (S.adding && e.key === 'Enter' && e.target.id === 'card-title') {
+    e.preventDefault();
+    $('#card-notes').focus();
   } else if (typing && (e.key === 'Escape' || (e.key === 'Enter' && e.target.id === 'card-title'))) {
     e.preventDefault();
     leaveField();
-  } else if (!typing && !mod && !e.altKey && e.key === 'c') {
+  } else if (!typing && !mod && !e.altKey && e.key === 'c' && S.open) {
     e.preventDefault();
     $('#card-draft').focus();
   } else if (!typing && !mod && !e.altKey && e.key === 'u') {
@@ -540,7 +593,7 @@ export function notesBlur(e) {
   if (!rendering) render();
 }
 
-addEventListener('resize', () => { if (dialog.open) { grow($('#card-notes')); grow($('#card-draft')); } }); // text re-wraps
+addEventListener('resize', () => { for (const el of dialog.querySelectorAll('textarea')) grow(el); }); // text re-wraps
 
 export function draftInput(e) {
   if (S.open) S.drafts[S.open] = e.currentTarget.value;
@@ -615,13 +668,12 @@ export function render() {
   }
   paint(h(Board), board);
   paint(h(CardBody), dialog);
-  if (S.open) grow($('#card-notes'));
+  if (S.open || S.adding) grow($('#card-notes'));
   rendering = false;
   const field = board.querySelector('input');
   if (field) {
     field.focus();
-    if (S.edit.i === undefined) field.select(); // renaming: replace, not append
-    else field.setSelectionRange(field.value.length, field.value.length);
+    field.select(); // renaming: replace, not append
   } else if (!dialog.open && !S.drag) { // scrolling mid-drag would move the board under the pointer
     board.querySelector('.sel')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }

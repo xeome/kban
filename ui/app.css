@@ -142,7 +142,6 @@ main {
 }
 .card:hover { background: var(--hover); }
 .card.sel { background: var(--sel); border-color: color-mix(in srgb, var(--dim) 45%, transparent); }
-.card.edit { cursor: text; }
 .card .t { font-weight: 500; color: var(--bright); }
 .card .meta { display: flex; align-items: center; gap: 4px; margin-top: 6px; font-size: 12px; color: var(--dim); }
 .card .meta svg { width: 14px; height: 14px; }
@@ -360,13 +359,17 @@ kbd {
 #card-cols { display: flex; flex-direction: column; gap: 2px; }
 #card-delete { margin-top: auto; align-self: flex-start; }
 
+.card-body.new { grid-template-columns: 1fr; }
+.new-row { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.new-row .hint { margin-right: auto; font-size: 12px; color: var(--dim); }
+
 @media (max-width: 640px) {
   #card { width: calc(100vw - 16px); height: calc(100dvh - 16px); }
   .card-body { display: flex; flex-direction: column; overflow-y: auto; }
   .card-main { overflow: visible; padding: 14px 14px 18px; }
   .card-side { border-left: 0; border-top: 1px solid var(--line); padding: 12px 8px 16px; }
   #card-delete { margin-top: 12px; }
-  .composer-row .hint { display: none; }
+  .composer-row .hint, .new-row .hint { display: none; }
 }
 
 @media (max-width: 820px) {
