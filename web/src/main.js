@@ -1,3 +1,3 @@
-import { listen, load } from './store.js';
+import { listen } from './store.js';
 
-load().then(listen);
+listen();

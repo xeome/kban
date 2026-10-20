@@ -38,9 +38,11 @@ async function tab(url) {
       await new Promise((r) => (ws.onopen = r));
       let id = 0;
       const wait = new Map();
+      const handlers = [];
       ws.onmessage = (m) => {
         const msg = JSON.parse(m.data);
         if (msg.id && wait.has(msg.id)) { wait.get(msg.id)(msg); wait.delete(msg.id); }
+        if (msg.method) handlers.forEach((h) => h(msg));
       };
       const send = (method, params = {}) => new Promise((r) => { wait.set(++id, r); ws.send(JSON.stringify({ id, method, params })); });
       const ev = async (expr) => {
@@ -74,7 +76,7 @@ async function tab(url) {
         await sleep(100);
         return true;
       };
-      return { send, ev, key, type, until, click };
+      return { send, ev, key, type, until, click, on: (h) => handlers.push(h) };
     } catch { await sleep(100); }
   }
   throw new Error('no chromium');
@@ -104,6 +106,13 @@ async function fresh(port, todo) {
   const p = await tab(url);
   await p.until(`document.querySelectorAll('.card').length === ${todo.length}`);
   return { f, p, k };
+}
+// Wraps EventSource from the next load on, before the page's script runs, so
+// its first stream is counted too. Returns how many of its streams are live.
+async function streams(p) {
+  await p.send('Page.enable'); // without it the script below never runs
+  await p.send('Page.addScriptToEvaluateOnNewDocument', { source: 'window.__es = []; window.EventSource = class extends EventSource { constructor(u) { super(u); __es.push(this); } };' });
+  return () => p.ev(`__es.filter((e) => e.readyState !== EventSource.CLOSED).length`);
 }
 const run = (name) => !only || only === name;
 const pages = async () => (await (await fetch('http://127.0.0.1:9339/json/list')).json()).filter((t) => t.type === 'page').length;
@@ -348,12 +357,9 @@ if (run('broken')) {
 // Chromium gives up when a reconnect is answered with an error, as here.
 if (run('reopen')) {
   const { f, p, k } = await fresh(4314, ['A']);
-  // Wrap EventSource before the page's script runs, so its first stream is counted too.
-  await p.send('Page.enable'); // without it the script below never runs
-  await p.send('Page.addScriptToEvaluateOnNewDocument', { source: 'window.__es = []; window.EventSource = class extends EventSource { constructor(u) { super(u); __es.push(this); } };' });
+  const live = await streams(p);
   await p.send('Page.reload');
   await p.until(`window.__es?.length === 1 && document.querySelectorAll('.card').length === 1`);
-  const live = () => p.ev(`__es.filter((e) => e.readyState !== EventSource.CLOSED).length`);
   k.kill('SIGKILL');
   await new Promise((r) => k.once('exit', r));
   let asked = 0;
@@ -369,6 +375,46 @@ if (run('reopen')) {
   const n = await live();
   check('after the browser gave up on the stream, an agent\'s card still reaches the page, over one stream',
     arrived && n === 1, `stand-in asked ${asked} times, ${n} live streams`);
+}
+
+// --- a board that failed to load is loaded again ------------------------------
+if (run('loadfail')) {
+  const { p } = await fresh(4315, ['A']);
+  let asked = 0;
+  p.on((m) => {
+    if (m.method !== 'Fetch.requestPaused') return;
+    const { requestId } = m.params;
+    if (asked++) p.send('Fetch.continueRequest', { requestId });
+    else p.send('Fetch.failRequest', { requestId, errorReason: 'ConnectionRefused' });
+  });
+  await p.send('Fetch.enable', { patterns: [{ urlPattern: '*/api/board' }] });
+  await p.send('Page.reload');
+  check('a board whose first load failed still shows',
+    await p.until(`document.querySelectorAll('.card').length === 1`, 5000) >= 0 && asked > 1, `${asked} board requests`);
+}
+
+// --- the stream is lost while the board loads: one stream comes back ----------
+if (run('loadlost')) {
+  const { f, p, k } = await fresh(4316, ['A']);
+  const live = await streams(p);
+  let held = null;
+  p.on((m) => {
+    if (m.method !== 'Fetch.requestPaused') return;
+    if (held === null) held = m.params.requestId;
+    else p.send('Fetch.continueRequest', { requestId: m.params.requestId });
+  });
+  await p.send('Fetch.enable', { patterns: [{ urlPattern: '*/api/board' }] });
+  await p.send('Page.reload');
+  for (let i = 0; i < 50 && held === null; i++) await sleep(100);
+  k.kill('SIGKILL');
+  await new Promise((r) => k.once('exit', r));
+  const lostFirst = await p.until(`__es[0].readyState === EventSource.CLOSED`) >= 0; // the stream's error before the load's
+  await p.send('Fetch.failRequest', { requestId: held, errorReason: 'ConnectionRefused' });
+  await server(f, 4316);
+  const shown = await p.until(`document.querySelectorAll('.card').length === 1`, 5000) >= 0;
+  await sleep(2500); // past the page's 2s reopen, so a second one has opened too
+  const n = await live();
+  check('a stream lost while its board loaded comes back once', held !== null && lostFirst && shown && n === 1, `${n} live streams`);
 }
 
 // --- Markdown in notes and comments, driven by mouse and keys ------------------
@@ -476,10 +522,6 @@ if (run('drag')) {
   fs.writeFileSync(f, JSON.stringify({ columns: Array.from({ length: 9 }, (_, c) => ({ title: `C${c}`, cards: [{ id: `x${c}`, title: `x${c}`, notes: '**x**' }, { id: `y${c}`, title: `y${c}` }] })) }, null, 2));
   const p = await tab(await server(f, 4311));
   await p.until(`document.querySelectorAll('.card').length === 18`);
-  // The stream's onopen loads the board again, and that render scrolls the
-  // selected card into view: let it land before scrolling away from it.
-  await p.until(`document.querySelector('#status').dataset.state === 'saved'`);
-  await sleep(500);
   await p.key('ArrowDown'); // selects x0, at the far left
   await p.ev(`document.querySelector('main').scrollLeft = 99999`);
   const at = (sel) => p.ev(`(() => { const r = document.querySelector(${JSON.stringify(sel)}).getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()`);

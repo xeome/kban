@@ -30,8 +30,7 @@ export const S = {
 
 // --- server ----------------------------------------------------------------
 
-export async function load() {
-  const { file, user, board, error } = await (await fetch('/api/board')).json();
+function loaded({ file, user, board, error }) {
   S.file = file;
   S.user = user;
   $('#file').textContent = file;
@@ -110,13 +109,20 @@ function failed(e) {
   status('error', e.unreadable ? 'not saved' : 'save failed: ' + e.message);
 }
 
+// A browser may give up on the stream for good: Firefox does when it drops
+// a silent one after a network change. So the page reconnects itself.
 export function listen() {
   const es = new EventSource('/api/events');
+  const lost = () => { status('offline'); es.close(); setTimeout(listen, 2000); };
   es.onmessage = (e) => receive(JSON.parse(e.data));
-  es.onopen = () => { status('saved'); load(); };
-  // A browser may give up on the stream for good: Firefox does when it drops
-  // a silent one after a network change. So the page reconnects itself.
-  es.onerror = () => { status('offline'); es.close(); setTimeout(listen, 2000); };
+  // The board loads on every open, so one that fails to arrive is a lost
+  // stream too, unless onerror already reopens it. An error while showing
+  // it is a bug, not a lost stream, so it stays uncaught.
+  es.onopen = () => {
+    status('saved');
+    fetch('/api/board').then((r) => r.json()).then(loaded, () => es.readyState === EventSource.OPEN && lost());
+  };
+  es.onerror = lost;
 }
 
 function status(state, text) {
