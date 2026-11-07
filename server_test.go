@@ -20,30 +20,44 @@ import (
 type fixture struct {
 	*httptest.Server
 	path string
+	api  string
 	t    *testing.T
 }
 
-func serve(t *testing.T) *fixture {
+func start(t *testing.T) *fixture {
 	t.Helper()
-	return serveIn(t, t.TempDir())
+	return startIn(t, t.TempDir())
 }
 
-func serveIn(t *testing.T, dir string) *fixture {
+func startIn(t *testing.T, dir string) *fixture {
 	t.Helper()
 	path := filepath.Join(dir, "TODO.json")
 	if err := os.WriteFile(path, []byte(Write(starter("TODO.json"))), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	s := newServer(path)
-	ts := httptest.NewServer(s.handler())
+	h, ts := startHub(t, path)
+	go h.watch()
+	return &fixture{ts, path, ts.URL + "/api/b/" + fileID(path), t}
+}
+
+// startHub serves a hub whose registry lists paths, without its poll loop.
+func startHub(t *testing.T, paths ...string) (*hub, *httptest.Server) {
+	t.Helper()
+	registry := filepath.Join(t.TempDir(), "kban", "boards")
+	for _, p := range paths {
+		if err := register(registry, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := newHub(registry, "me")
+	ts := httptest.NewServer(h.handler())
 	t.Cleanup(ts.Close)
-	go s.watch()
-	return &fixture{ts, path, t}
+	return h, ts
 }
 
 func (f *fixture) getState() state {
 	f.t.Helper()
-	r, err := http.Get(f.URL + "/api/board")
+	r, err := http.Get(f.api + "/board")
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -64,34 +78,18 @@ func (f *fixture) get() Board {
 	return *st.Board
 }
 
-// id is what a tab sends back on every save: the board's identity, as the
-// GET that loaded it gave it.
-func (f *fixture) id() string {
-	f.t.Helper()
-	r, err := http.Get(f.URL + "/api/board")
-	if err != nil {
-		f.t.Fatal(err)
-	}
-	defer r.Body.Close()
-	var got map[string]any
-	json.NewDecoder(r.Body).Decode(&got)
-	id, _ := got["fileID"].(string)
-	return id
-}
-
 func (f *fixture) send(base, board Board) *http.Response {
 	f.t.Helper()
-	return f.sendAs(f.id(), base, board)
+	return putTo(f.t, f.api, base, board)
 }
 
-// sendAs is a save from a tab that loaded the board identified as id.
-func (f *fixture) sendAs(id string, base, board Board) *http.Response {
-	f.t.Helper()
-	body, _ := json.Marshal(map[string]any{"fileID": id, "base": base, "board": board})
-	req, _ := http.NewRequest("PUT", f.URL+"/api/board", bytes.NewReader(body))
+func putTo(t *testing.T, api string, base, board Board) *http.Response {
+	t.Helper()
+	body, _ := json.Marshal(map[string]any{"base": base, "board": board})
+	req, _ := http.NewRequest("PUT", api+"/board", bytes.NewReader(body))
 	r, err := http.DefaultClient.Do(req)
 	if err != nil {
-		f.t.Fatal(err)
+		t.Fatal(err)
 	}
 	return r
 }
@@ -168,7 +166,7 @@ func TestStarter(t *testing.T) {
 
 // A card with no id from the browser would make the file unreadable.
 func TestPutRefusesIDless(t *testing.T) {
-	f := serve(t)
+	f := start(t)
 	base := f.get()
 	was, _ := os.ReadFile(f.path)
 	idless := add(base, 1, "human card")
@@ -188,58 +186,13 @@ func TestPutRefusesIDless(t *testing.T) {
 	}
 }
 
-// A tab keeps its undo steps and a failed save across a reconnect. If
-// another kban took the port meanwhile, they belong to another board.
-func TestPutRefusesAnotherBoard(t *testing.T) {
-	f, other := serve(t), serve(t)
-	base := f.get()
-	was, _ := os.ReadFile(f.path)
-	r := f.sendAs(other.id(), base, add(base, 1, "card from another board"))
-	body, _ := io.ReadAll(r.Body)
-	r.Body.Close()
-	if r.StatusCode != http.StatusPreconditionFailed || !strings.Contains(string(body), f.path) {
-		t.Errorf("PUT from a tab on another board: %s %s, want 412 naming %s", r.Status, body, f.path)
-	}
-	if got, _ := os.ReadFile(f.path); !bytes.Equal(got, was) {
-		t.Errorf("file was rewritten:\n%s", got)
-	}
-}
-
-// A tab still running the page from before saves named their board, or one
-// whose board has not loaded yet, has only seen this kban.
-func TestPutAcceptsTabWithoutID(t *testing.T) {
-	f := serve(t)
-	base := f.get()
-	if r := f.sendAs("", base, add(base, 1, "card")); r.StatusCode != 200 {
-		t.Errorf("PUT naming no board: %s, want 200", r.Status)
-	}
-}
-
-// The same file is the same board however its path is spelled, so a tab
-// keeps its edits when kban restarts on it from a symlinked directory.
-func TestSymlinkedPathIsTheSameBoard(t *testing.T) {
-	f := serve(t)
-	link := filepath.Join(t.TempDir(), "link")
-	if err := os.Symlink(filepath.Dir(f.path), link); err != nil {
-		t.Skip(err)
-	}
-	s := newServer(filepath.Join(link, "TODO.json"))
-	ts := httptest.NewServer(s.handler())
-	t.Cleanup(ts.Close)
-	viaLink := &fixture{ts, filepath.Join(link, "TODO.json"), t}
-	base := f.get()
-	if r := f.sendAs(viaLink.id(), base, add(base, 1, "card")); r.StatusCode != 200 {
-		t.Errorf("PUT from a tab that loaded the same file through a symlink: %s, want 200", r.Status)
-	}
-}
-
 // A path JSON cannot carry intact still names its board.
 func TestSaveUnderNonUTF8Path(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "caf\xe9")
 	if err := os.Mkdir(dir, 0o755); err != nil {
 		t.Skip(err) // a filesystem that takes only UTF-8 names
 	}
-	f := serveIn(t, dir)
+	f := startIn(t, dir)
 	base := f.get()
 	f.put(base, add(base, 1, "card"))
 }
@@ -263,7 +216,7 @@ func TestCommandDuringSave(t *testing.T) {
 		}
 	}
 
-	f := serve(t)
+	f := start(t)
 	base := f.get()
 	once(func() {
 		f.agent(func(b *Board) { c := &b.Columns[0].Cards[0]; c.Comments = append(c.Comments, agent) })
@@ -274,7 +227,7 @@ func TestCommandDuringSave(t *testing.T) {
 	r.Body.Close()
 	check(f, "agent writes during a PUT")
 
-	f = serve(t)
+	f = start(t)
 	base = f.get()
 	mine = clone(base)
 	mine.Columns[0].Cards[0].Notes = "typed"
@@ -286,7 +239,7 @@ func TestCommandDuringSave(t *testing.T) {
 }
 
 func TestPutWritesFile(t *testing.T) {
-	f := serve(t)
+	f := start(t)
 	os.Chmod(f.path, 0o640)
 	base := f.get()
 	f.put(base, add(base, 1, "human card"))
@@ -299,7 +252,7 @@ func TestPutWritesFile(t *testing.T) {
 }
 
 func TestAgentEditDuringBrowserEdit(t *testing.T) {
-	f := serve(t)
+	f := start(t)
 	base := f.get() // the browser loads, then sits there
 
 	f.agent(func(b *Board) {
@@ -316,7 +269,7 @@ func TestAgentEditDuringBrowserEdit(t *testing.T) {
 }
 
 func TestAgentCommentDuringBrowserComment(t *testing.T) {
-	f := serve(t)
+	f := start(t)
 	base := f.get()
 	agent := Comment{"claude", "2026-10-15T14:02:00+03:00", "fixed on card/x"}
 	human := Comment{"me", "2026-10-15T14:03:00+03:00", "thanks"}
@@ -335,36 +288,12 @@ func TestAgentCommentDuringBrowserComment(t *testing.T) {
 }
 
 func TestAgentEditReachesOpenTabs(t *testing.T) {
-	f := serve(t)
-	// ResponseHeaderTimeout bounds the connect, not the stream: if the
-	// handler forgets to flush its headers this fails instead of hanging.
-	c := &http.Client{Transport: &http.Transport{ResponseHeaderTimeout: 5 * time.Second}}
-	r, err := c.Get(f.URL + "/api/events")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer r.Body.Close()
-	events := make(chan state, 4)
-	go func() {
-		for sc := bufio.NewScanner(r.Body); sc.Scan(); {
-			if data, ok := strings.CutPrefix(sc.Text(), "data: "); ok {
-				var st state
-				json.Unmarshal([]byte(data), &st)
-				events <- st
-			}
-		}
-	}()
+	f := start(t)
+	events := listen(t, f.api+"/events")
 	next := func() state {
-		select {
-		case st := <-events:
-			return st
-		case <-time.After(5 * time.Second):
-			t.Fatal("no event pushed for the file change")
-			return state{}
-		}
+		t.Helper()
+		return nextBoard(t, events)
 	}
-
-	time.Sleep(600 * time.Millisecond) // let watch take its first reading
 	f.agent(func(b *Board) {
 		b.Columns[0].Cards = append(b.Columns[0].Cards, Card{ID: "agentcrd", Title: "agent card"})
 	})
@@ -382,9 +311,9 @@ func TestAgentEditReachesOpenTabs(t *testing.T) {
 // its first bytes arrive. A tab that reconnects while the file is quiet
 // would say offline until the next change.
 func TestStreamSendsOnConnect(t *testing.T) {
-	f := serve(t)
+	f := start(t)
 	c := &http.Client{Timeout: 2 * time.Second} // a silent stream fails the test instead of hanging it
-	r, err := c.Get(f.URL + "/api/events")
+	r, err := c.Get(f.api + "/events")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -403,7 +332,7 @@ func TestStreamSendsOnConnect(t *testing.T) {
 // rewrites anything it stores, that base stops matching and an edit
 // becomes a second card.
 func TestTitleIsStoredAsTyped(t *testing.T) {
-	f := serve(t)
+	f := start(t)
 	base := f.get()
 	typed := add(base, 1, "a\n# b ")
 	f.put(base, typed)
@@ -419,7 +348,7 @@ func TestTitleIsStoredAsTyped(t *testing.T) {
 }
 
 func TestInvalidFileIsNeverOverwritten(t *testing.T) {
-	f := serve(t)
+	f := start(t)
 	base := f.get()
 	broken := []byte("{\n  \"columns\": [\n    {\"title\": \"Todo\", \"cards\": [], \"colour\": \"red\"}\n  ]\n}\n")
 	os.WriteFile(f.path, broken, 0o644)

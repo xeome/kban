@@ -15,8 +15,17 @@ Or from a clone, into `$(go env GOPATH)/bin`:
 ## Use
 
     kban [board.json]        # default ./TODO.json, created if missing
+    kban -d [board.json]     # the same, with the hub in the background
 
-Flags: `-p 4177` port (the next free of ten if taken), `-no-open`.
+One kban, the hub, serves every board in one tab: a sidebar lists them by
+project and marks the ones that changed since you last looked. `kban FILE`
+adds the file to `~/.config/kban/boards` (`$XDG_CONFIG_HOME/kban/boards`),
+one absolute path per line, and opens it on the hub, starting the hub first
+if none runs on the port. Delete a line to drop that board. `kban -d` with no
+file starts the hub alone. The hub listens on 127.0.0.1 and, when
+`tailscale ip -4` answers, on that address too.
+
+Flags: `-p 4177` port, `-no-open`, `-d` (Unix only).
 
 Agents change the board with these, never by editing the file:
 
