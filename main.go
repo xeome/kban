@@ -66,6 +66,10 @@ func main() {
 	}
 	flag.Parse()
 	path := flag.Arg(0)
+	if path == "help" {
+		flag.Usage()
+		os.Exit(0)
+	}
 	if path == "" && !*detached && os.Getenv(childEnv) == "" {
 		path = "TODO.json"
 	}
