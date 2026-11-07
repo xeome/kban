@@ -1,12 +1,17 @@
 import { h, render as paint } from 'preact';
+import { showSession } from './blocks.jsx';
+import { retheme } from './diagram.js';
 import { Board, CardBody, Sidebar } from './view.jsx';
 
 const $ = (s) => document.querySelector(s);
 const clone = (v) => JSON.parse(JSON.stringify(v));
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
-const ID = location.pathname.split('/')[2] || '';
-const API = `/api/b/${ID}`;
+const [, kind, part = ''] = location.pathname.split('/');
+const SESSION = kind === 's' ? decodeURIComponent(part) : null;
+const ID = SESSION === null ? part : '';
+const API = SESSION === null ? `/api/b/${ID}` : `/api/s/${encodeURIComponent(SESSION)}`;
+if (SESSION !== null) document.body.classList.add('on-session');
 
 // base is the board the server last acknowledged; local edits are relative
 // to it. The server merges {base, board} against the file, so this client
@@ -127,15 +132,22 @@ export function listen() {
     es.close();
     setTimeout(listen, 2000);
     // Reconnecting never brings back a board the hub no longer lists.
-    fetch(`${API}/board`).then((r) => r.status === 404 && problem('unlisted',
+    if (SESSION === null) fetch(`${API}/board`).then((r) => r.status === 404 && problem('unlisted',
       `${S.file} is not in the hub's list of boards (~/.config/kban/boards). Run kban <file> to add it back.`), () => {});
   };
   es.onmessage = (e) => receive(JSON.parse(e.data));
   es.addEventListener('boards', (e) => { boards = JSON.parse(e.data); side(); });
+  es.addEventListener('grill', (e) => {
+    const ev = JSON.parse(e.data);
+    questions = ev.open;
+    side();
+    if (ev.session) session(ev.session);
+  });
   // The board loads on every open, so one that fails to arrive is a lost
   // stream too, unless onerror already reopens it. An error while showing
   // it is a bug, not a lost stream, so it stays uncaught.
   es.onopen = () => {
+    if (SESSION !== null) return;
     fetch(`${API}/board`).then((r) => r.json()).then(loaded, () => es.readyState === EventSource.OPEN && lost());
   };
   es.onerror = lost;
@@ -155,16 +167,38 @@ function problem(error, text = `${S.file} can't be read: ${error}. Your changes 
 
 // --- the boards sidebar ----------------------------------------------------
 
-// Painted only here, on the server's boards event and when the tab shows
-// again, never by render(), which selects inputs and scrolls.
+// Painted only here, on the server's boards and grill events and when the
+// tab shows again, never by render(), which selects inputs and scrolls.
 let boards = [];
+let questions = [];
+const acked = new Set();
 function side() {
   const seen = see((seen) => {
     for (const b of boards) {
       if (!(b.id in seen) || (b.id === ID && document.visibilityState === 'visible')) seen[b.id] = b.version;
     }
   });
-  paint(h(Sidebar, { boards, seen, shown: ID }), $('#side'));
+  paint(h(Sidebar, { boards, seen, shown: ID, questions, session: SESSION }), $('#side'));
+  // A question this sidebar shows needs no new tab, hidden or not. The
+  // tailnet listener refuses the ack, so a phone never stops one opening.
+  for (const q of questions) {
+    if (acked.has(q.token)) continue;
+    acked.add(q.token);
+    fetch(`/api/q/${q.token}/ack`, { method: 'POST' }).catch(() => {});
+  }
+}
+
+// --- a session's page ------------------------------------------------------
+
+function session(s) {
+  const src = s.source;
+  const asking = s.questions.length > 0;
+  const file = $('#file');
+  file.textContent = src ? [src.task, src.project, src.branch].filter(Boolean).join(' · ') : 'An agent session';
+  file.title = src?.path || '';
+  document.title = (asking ? '● ' : '') + (src ? `${src.task} · ${src.project}` : 'kban');
+  status(asking ? 'asking' : 'idle', asking ? 'Waiting for your answer' : 'Waiting for the next question');
+  showSession(s, $('#sess'));
 }
 
 // see changes the version of each board this browser last showed, shared by
@@ -179,11 +213,11 @@ function see(edit) {
 document.addEventListener('visibilitychange', side);
 
 // The first attempt that fails ends the wait, and its edit is dropped, as a reload drops it.
-export async function go(id) {
-  if (id === ID) return;
+export async function go(url) {
+  if (url === location.pathname) return;
   clearTimeout(S.timer);
   while ((S.inflight || S.dirty) && await save());
-  location.assign(`/b/${id}`);
+  location.assign(url);
 }
 
 // --- theme ---------------------------------------------------------------
@@ -196,7 +230,9 @@ $('#theme').addEventListener('click', () => {
   const light = (root.dataset.theme || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')) === 'light';
   root.dataset.theme = light ? 'dark' : 'light';
   try { localStorage.theme = root.dataset.theme; } catch {}
+  retheme();
 });
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', retheme);
 
 // --- note ------------------------------------------------------------------
 

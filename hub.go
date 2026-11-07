@@ -21,6 +21,14 @@ type hub struct {
 	order    []string
 	regStamp string
 	sent     []listed // the list as the streams were last told it
+
+	sessions  map[string]*gsession
+	questions map[string]*asked    // by token
+	gsubs     map[*stream]struct{} // /s/{session} pages' streams
+	tail      string               // the tailnet base URL, "" when off the tailnet
+	ackWait   time.Duration
+	browse    func(url string)
+	push      *push
 }
 
 type served struct {
@@ -34,7 +42,7 @@ type served struct {
 
 // A stream's signals are latest-wins: it writes the state as it is when it
 // wakes, so a signal that finds one pending loses nothing.
-type stream struct{ board, list chan struct{} }
+type stream struct{ board, list, grill chan struct{} }
 
 type listed struct {
 	ID      string `json:"id"`
@@ -44,7 +52,9 @@ type listed struct {
 }
 
 func newHub(registry, user string) *hub {
-	h := &hub{registry: registry, user: user, boards: map[string]*served{}}
+	h := &hub{registry: registry, user: user, boards: map[string]*served{},
+		sessions: map[string]*gsession{}, questions: map[string]*asked{}, gsubs: map[*stream]struct{}{},
+		ackWait: 3 * time.Second, browse: openBrowser, push: newPush()}
 	h.reload()
 	h.sent = h.list()
 	return h
@@ -106,7 +116,7 @@ func (h *hub) reload() {
 		keep[id] = true
 		h.order = append(h.order, id)
 		if h.boards[id] == nil {
-			h.boards[id] = &served{path: line, project: filepath.Base(filepath.Dir(line)), stamp: stamp(line), subs: map[*stream]struct{}{}, gone: make(chan struct{})}
+			h.boards[id] = &served{path: line, project: projectOf(filepath.Dir(line)), stamp: stamp(line), subs: map[*stream]struct{}{}, gone: make(chan struct{})}
 		}
 	}
 	for id, bf := range h.boards {
@@ -157,7 +167,7 @@ func (h *hub) listLocked() []listed {
 }
 
 func (h *hub) subscribe(bf *served) *stream {
-	s := &stream{make(chan struct{}, 1), make(chan struct{}, 1)}
+	s := &stream{make(chan struct{}, 1), make(chan struct{}, 1), make(chan struct{}, 1)}
 	h.mu.Lock()
 	bf.subs[s] = struct{}{}
 	h.mu.Unlock()
@@ -202,12 +212,16 @@ func (h *hub) poll() {
 				signal(s.list)
 			}
 		}
+		for s := range h.gsubs {
+			signal(s.list)
+		}
 	}
 }
 
 func (h *hub) watch() {
-	for range time.Tick(500 * time.Millisecond) {
+	for now := range time.Tick(500 * time.Millisecond) {
 		h.poll()
+		h.push.tick(now)
 	}
 }
 

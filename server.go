@@ -14,11 +14,34 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"strings"
 )
 
 //go:embed ui
 var ui embed.FS
 var uiFS, _ = fs.Sub(ui, "ui")
+
+// uiTags is each embedded file's ETag. Embedded files have no modification
+// time, so without one the browser downloads mermaid.js (5 MB) on every load.
+var uiTags = func() map[string]string {
+	tags := map[string]string{}
+	fs.WalkDir(uiFS, ".", func(p string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			b, _ := fs.ReadFile(uiFS, p)
+			sum := sha256.Sum256(b)
+			tags[p] = `"` + hex.EncodeToString(sum[:8]) + `"`
+		}
+		return err
+	})
+	return tags
+}()
+
+// serveUI serves an embedded file, revalidated by its ETag on every load.
+func serveUI(w http.ResponseWriter, r *http.Request, name string) {
+	w.Header().Set("ETag", uiTags[name])
+	w.Header().Set("Cache-Control", "no-cache")
+	http.ServeFileFS(w, r, uiFS, name)
+}
 
 type state struct {
 	Board *Board `json:"board,omitempty"`
@@ -43,18 +66,38 @@ func fileID(path string) string {
 	return hex.EncodeToString(sum[:8])
 }
 
-func (h *hub) handler() http.Handler {
+// handler serves the 127.0.0.1 listener; tailnet serves the tailnet
+// address, where a phone answers questions but asks and acks none.
+func (h *hub) handler() http.Handler { return h.mux(true) }
+func (h *hub) tailnet() http.Handler { return h.mux(false) }
+
+func (h *hub) mux(local bool) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", h.root)
-	mux.HandleFunc("GET /b/{id}", h.on(func(w http.ResponseWriter, r *http.Request, _ *served) {
-		http.ServeFileFS(w, r, uiFS, "index.html")
-	}))
+	mux.HandleFunc("GET /b/{id}", h.on(func(w http.ResponseWriter, r *http.Request, _ *served) { serveUI(w, r, "index.html") }))
 	mux.HandleFunc("GET /api/b/{id}/board", h.on(h.getBoard))
 	mux.HandleFunc("PUT /api/b/{id}/board", h.on(h.putBoard))
 	mux.HandleFunc("GET /api/b/{id}/events", h.on(h.events))
 	mux.HandleFunc("GET /api/boards", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, h.list()) })
 	mux.HandleFunc("POST /api/ids", newIDs)
-	mux.Handle("GET /", http.FileServerFS(uiFS))
+	mux.HandleFunc("GET /s/{session}", func(w http.ResponseWriter, r *http.Request) { serveUI(w, r, "index.html") })
+	mux.HandleFunc("GET /api/s/{session}/events", h.sessionEvents)
+	mux.HandleFunc("POST /api/q/{token}/answer", h.answer)
+	mux.HandleFunc("GET /api/q/{token}/file/{path}", h.image)
+	ask, ack := h.ask, h.ack
+	if !local {
+		ask, ack = http.NotFound, http.NotFound
+	}
+	mux.HandleFunc("POST /api/grill/ask", ask)
+	mux.HandleFunc("POST /api/q/{token}/ack", ack)
+	files := http.FileServerFS(uiFS)
+	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		if tag := uiTags[strings.TrimPrefix(r.URL.Path, "/")]; tag != "" {
+			w.Header().Set("ETag", tag)
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+		files.ServeHTTP(w, r)
+	})
 	return localOnly(mux)
 }
 
@@ -144,6 +187,7 @@ func (h *hub) events(w http.ResponseWriter, r *http.Request, bf *served) {
 	// page reloads the board on open.
 	io.WriteString(w, ":\n\n")
 	signal(s.list)
+	signal(s.grill)
 	for {
 		select {
 		case <-r.Context().Done():
@@ -156,6 +200,11 @@ func (h *hub) events(w http.ResponseWriter, r *http.Request, bf *served) {
 		case <-s.list:
 			data, _ := json.Marshal(h.list())
 			fmt.Fprintf(w, "event: boards\ndata: %s\n\n", data)
+		case <-s.grill:
+			h.mu.Lock()
+			data := h.grillEventLocked("")
+			h.mu.Unlock()
+			fmt.Fprintf(w, "event: grill\ndata: %s\n\n", data)
 		}
 		w.(http.Flusher).Flush()
 	}

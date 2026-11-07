@@ -23,3 +23,11 @@ export function md(src, face = false) {
   if (!seen.has(key)) seen.set(key, it.render(src, { face }).trim());
   return seen.get(key);
 }
+
+// One-line fields of a grill question, table and stats cells: inline
+// Markdown only, so a "-" or a "1." stays text instead of starting a list.
+export function mdInline(src) {
+  const key = `i${src}`;
+  if (!seen.has(key)) seen.set(key, it.renderInline(src, {}));
+  return seen.get(key);
+}

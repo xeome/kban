@@ -24,10 +24,14 @@ person and the agents working alongside them.
     server.go   HTTP + SSE, file read/write, the 409 on an unreadable file
     file.go     update: the one way the file is written; create: a new one
     cli.go      the agent commands
+    mcp.go      `kban mcp`: grill's ask tool for an agent session, relayed to the hub
+    grill.go    grill questions: held asks, answers, acks, images, /s/{session}
+    push.go     the phone push through ntfy.sh, sent from the poll loop
     main.go     flags, serving or joining the hub on the port, browser opening
     ui/         embedded (go:embed) and served as is; app.js is built, never edited
     web/src/    the UI source: store.js (state, saving, keys, drag), view.jsx
-                (Preact components), md.js (Markdown for notes and comments)
+                (Preact components), md.js (Markdown for notes and comments),
+                blocks.jsx (a session's grill page), diagram.js (Mermaid)
 
 ## Rules that break things when ignored
 
@@ -63,9 +67,10 @@ person and the agents working alongside them.
   landing at once both keep their change, and a reader never sees half a
   board.
 - Changes to the file are picked up by polling, within 500ms, and pushed
-  over `/api/b/{id}/events`, with the board list as a named `boards` event.
-  The sidebar is painted only by that event and when the tab shows again,
-  never by render(). The page reopens that stream itself after any error
+  over `/api/b/{id}/events` and `/api/s/{session}/events`, with the board
+  list as a named `boards` event and the open questions as `grill`.
+  The sidebar is painted only by those events and when the tab shows again,
+  never by render(). The page reopens its stream itself after any error
   and loads the board on every open, because Firefox gives up on a silent
   stream after a network change.
 - **Render never touches a focused field.** The modal follows its card by
@@ -73,13 +78,22 @@ person and the agents working alongside them.
   lands while you type without moving your caret. Every
   text field Preact owns is a `Field` (view.jsx), which goes uncontrolled
   while focused; always pass its `value`.
-- **File text becomes markup only through `md()`;** everything else is
-  JSX text. `md()` escapes HTML, renders an image as a link, and shows a
-  link to anything but http(s) or mailto as plain text.
+- **File text and grill questions become markup only through `md()`,
+  `mdInline()` and `diagram()`;** everything else is JSX text. `md()`
+  escapes HTML, renders an image as a link, and shows a link to anything
+  but http(s) or mailto as plain text; `mdInline()` does the same for one
+  line, so a "-" stays text. `diagram()` runs Mermaid under securityLevel
+  strict with htmlLabels, flowchart, themeCSS, fontFamily, altFontFamily and
+  themeVariables locked in `secure`, so an `%%{init}%%` line can neither turn
+  HTML labels back on nor put a `url()` in the page's CSS.
   An agent's text must never become markup on the user's localhost page.
-- **The committed bundle matches its sources.** `bundle_test.go` hashes
-  web/ the way build.js does and fails when ui/app.js is stale or hand-edited, so
-  `go install` never needs bun.
+- **The committed bundles match their sources.** `bundle_test.go` hashes
+  each bundle's inputs the way build.js does (app.js: web/src and the build
+  files; mermaid.js: the build files alone) and fails when ui/app.js or
+  ui/mermaid.js is stale or hand-edited, so `go install` never needs bun.
+- **A grill question lives as long as its relay's held request.** The hub
+  keeps no question past it: a terminal cancel, a relay that died and a hub
+  restart all end the request, and so the question.
 
 ## Testing
 
@@ -96,6 +110,8 @@ stepping, comments landing while you type, undo, the broken-file banner,
 the stream reopening after the browser gives up on it or the board fails
 to load, a save that never landed, the hub's sidebar (a second kban joining,
 the change dot, a rename that lands before the switch), the notes
-swap, Markdown, and one drag across columns. It covers no drag
+swap, Markdown, one drag across columns, and grill questions (`grill`,
+`grill2`: answering, Ask and the lean, words kept when a question closes,
+hostile text and Mermaid, two relays of one session). It covers no drag
 within a column and no column drag: after touching the UI, do those by
 hand, then `cat` the file and confirm it says what the screen says.

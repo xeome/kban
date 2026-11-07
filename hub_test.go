@@ -148,6 +148,9 @@ func TestHubServesEachBoardByID(t *testing.T) {
 	}
 
 	e := next(t, events)
+	for e.name == "grill" { // sent on open too
+		e = next(t, events)
+	}
 	var l []listed
 	json.Unmarshal([]byte(e.data), &l)
 	if e.name != "boards" || len(l) != 2 || l[1].Version != stamp(b) {
@@ -297,6 +300,38 @@ func TestPollSendsBoardAndList(t *testing.T) {
 			json.Unmarshal([]byte(e.data), &l)
 			gotList = len(l) == 2 && l[1].Version == stamp(b)
 		}
+	}
+}
+
+// A /s/{session} page has the boards sidebar too.
+func TestPollSendsTheListToSessionPages(t *testing.T) {
+	a := newBoardFile(t, t.TempDir(), "TODO.json", "A")
+	h, ts := startHub(t, a)
+	events := listen(t, ts.URL+"/api/s/sess/events")
+	nextList(t, events)
+	agentAdd(t, a, "new on A")
+	h.poll()
+	if l := nextList(t, events); len(l) != 1 || l[0].Version != stamp(a) {
+		t.Errorf("boards = %+v, want A at its new version %s", l, stamp(a))
+	}
+}
+
+// The embedded UI revalidates instead of downloading again: mermaid.js is 5 MB.
+func TestUIFilesRevalidate(t *testing.T) {
+	_, ts := startHub(t)
+	r, err := http.Get(ts.URL + "/mermaid.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Body.Close()
+	req, _ := http.NewRequest("GET", ts.URL+"/mermaid.js", nil)
+	req.Header.Set("If-None-Match", r.Header.Get("ETag"))
+	if r, err = http.DefaultClient.Do(req); err != nil {
+		t.Fatal(err)
+	}
+	r.Body.Close()
+	if r.StatusCode != http.StatusNotModified {
+		t.Errorf("GET /mermaid.js with its ETag %q: %d, want 304", req.Header.Get("If-None-Match"), r.StatusCode)
 	}
 }
 
