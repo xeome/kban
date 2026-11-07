@@ -38,10 +38,8 @@ function config() {
 export async function retheme() {
   if (!loading) return;
   (await loading).initialize(config());
-  for (const [box, src] of drawn) {
-    if (box.isConnected) draw(box, src);
-    else drawn.delete(box);
-  }
+  prune();
+  for (const box of boxes.keys()) draw(box);
 }
 
 // Mermaid wants colours, not var(), so the tokens are read as resolved now.
@@ -66,30 +64,36 @@ function theme() {
 }
 
 let n = 0;
-const drawn = new Map(); // box -> source, to draw again on a theme change
+const boxes = new Map(); // box -> source, to draw again on a theme change
+const due = new Set();
 
 // Mermaid measures text inside the box it is given: mounted on body, a
 // flex row here, its box squeezed the panel while it drew.
 export function diagram(src) {
+  prune();
   const box = document.createElement('div');
   box.className = 'scroll diagram';
   const wait = document.createElement('span');
   wait.className = 'wait';
   wait.textContent = 'Drawing the diagram…';
   box.append(wait);
-  draw(box, src);
+  boxes.set(box, src);
+  sizes.observe(box);
+  draw(box);
   return box;
 }
 
-async function draw(box, src) {
+// A box with no size, under display:none or not yet shown, measures every
+// label as nothing: it draws once it has one.
+async function draw(box) {
+  const src = boxes.get(box);
   const id = `kd${++n}`;
   try {
     const mermaid = await load();
+    if (!box.clientWidth) return due.add(box);
     const { svg } = await mermaid.render(id, src, box);
     box.innerHTML = svg; // Mermaid's own output, sanitized under securityLevel strict
     fit(box);
-    sizes.observe(box);
-    drawn.set(box, src);
   } catch {
     const pre = document.createElement('pre');
     pre.textContent = src;
@@ -106,4 +110,20 @@ function fit(box) {
   const width = `${Math.max(natural * 0.8, Math.min(natural, box.clientWidth))}px`;
   if (svg.style.width !== width) svg.style.width = width;
 }
-const sizes = new ResizeObserver((boxes) => boxes.forEach((b) => fit(b.target)));
+const sizes = new ResizeObserver((entries) => {
+  for (const { target: box } of entries) {
+    if (box.clientWidth && due.delete(box)) draw(box);
+    else fit(box);
+  }
+});
+
+// Md sets its html again on every change, leaving the old boxes behind.
+function prune() {
+  for (const box of boxes.keys()) {
+    if (!box.isConnected) {
+      boxes.delete(box);
+      due.delete(box);
+      sizes.unobserve(box);
+    }
+  }
+}

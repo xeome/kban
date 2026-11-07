@@ -1,4 +1,5 @@
-import { useRef } from 'preact/hooks';
+import { useEffect, useRef } from 'preact/hooks';
+import { diagram } from './diagram.js';
 import { md } from './md.js';
 import {
   S, addCard, addColumn, addNew, addingColumn, closeCard, colKey, deleteComment, deleteOpenCard, discardNew, draftInput, editKeys, find, go, leaveEdit, moveOpenCard, newNotesInput, newTitleInput, notesBlur, notesFocus,
@@ -21,8 +22,18 @@ export function Field({ tag: Tag = 'input', value, ...props }) {
   return <Tag ref={ref} {...props} value={focused ? undefined : value} />;
 }
 
-// The only place file text becomes markup.
-const Md = ({ src, face, ...props }) => <div {...props} dangerouslySetInnerHTML={{ __html: md(src, face) }} />;
+// The only place file text and reports become markup. Preact sets the html
+// again only when it changes, so a drawn diagram stays the same node through
+// every render.
+export function Md({ src, face, tag: Tag = 'div', ...props }) {
+  const ref = useRef();
+  const html = md(src, face);
+  useEffect(() => {
+    if (face) return;
+    for (const code of ref.current.querySelectorAll('pre > code[class~=language-mermaid i]')) code.parentNode.replaceWith(diagram(code.textContent));
+  }, [html, face]);
+  return <Tag ref={ref} {...props} dangerouslySetInnerHTML={{ __html: html }} />;
+}
 
 const isEditing = (c) => S.edit?.c === c;
 
@@ -81,12 +92,11 @@ export function Board() {
 // The textarea stays mounted under the view, a label for it, so a click or a
 // Tab edits the source natively; app.css swaps the two on focus.
 function Notes({ notes }) {
-  const html = md(notes);
   return (
     <div class="notes">
       <Field tag="textarea" id="card-notes" aria-label="Notes" rows={3} placeholder="Add notes" value={notes}
         onFocus={notesFocus} onInput={notesInput} onBlur={notesBlur} />
-      {html ? <label for="card-notes" class="view md" dangerouslySetInnerHTML={{ __html: html }} /> : null}
+      {md(notes) ? <Md tag="label" for="card-notes" class="view md" src={notes} /> : null}
     </div>
   );
 }
@@ -180,30 +190,41 @@ export function CardBody() {
   );
 }
 
-// Projects are the union of the boards' and the open questions', so a repo
-// with no board still shows its agent's question.
-export function Sidebar({ boards, seen, shown, questions, session }) {
+function SessionLink({ id, current, children, ...props }) {
+  const url = `/s/${encodeURIComponent(id)}`;
+  return (
+    <a href={url} aria-current={current ? 'page' : undefined} {...props} onClick={(e) => {
+      if (e.button || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return; // a new tab or window: the browser's own
+      e.preventDefault();
+      go(url);
+    }}>{children}</a>
+  );
+}
+
+// Projects are the union of the boards', the open questions' and the
+// reports', so a repo with no board still shows its agents.
+export function Sidebar({ boards, seen, shown, questions, reports, session }) {
   const projects = new Map();
-  const group = (p) => projects.get(p) || projects.set(p, { boards: [], qs: [] }).get(p);
+  const group = (p) => projects.get(p) || projects.set(p, { boards: [], qs: [], rs: [] }).get(p);
   for (const b of boards) group(b.project).boards.push(b);
   for (const q of questions) group(q.project).qs.push(q);
-  return [...projects].map(([project, { boards: bs, qs }]) => (
+  for (const r of reports) if (!questions.some((q) => q.session === r.session)) group(r.project).rs.push(r);
+  return [...projects].map(([project, { boards: bs, qs, rs }]) => (
     <div class="group">
       <span class="head" title={project}>{project}</span>
-      {qs.map((q) => {
-        const url = `/s/${encodeURIComponent(q.session)}`;
-        return (
-          <a class="item ask" href={url} aria-current={q.session === session ? 'page' : undefined} data-token={q.token}
-            title={`${q.task}\n${q.id}: ${q.question}`} onClick={(e) => {
-              if (e.button || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return; // a new tab or window: the browser's own
-              e.preventDefault();
-              go(url);
-            }}>
-            <span class="label">{q.id} · {q.task}</span>
-            <span class="badge" role="img" aria-label="question waiting">?</span>
-          </a>
-        );
-      })}
+      {qs.map((q) => (
+        <SessionLink class="item ask" id={q.session} current={q.session === session} data-token={q.token} title={`${q.task}\n${q.id}: ${q.question}`}>
+          <span class="label">{q.id} · {q.task}</span>
+          <span class="badge" role="img" aria-label="question waiting">?</span>
+        </SessionLink>
+      ))}
+      {rs.map((r) => (
+        <SessionLink class="item report" id={r.session} current={r.session === session} data-session={r.session} title={r.session}>
+          <span class="label">Report · {new Date(r.time).toDateString() === new Date().toDateString()
+            ? new Date(r.time).toLocaleTimeString(undefined, { timeStyle: 'short' }) : when(r.time)}</span>
+          {r.time > (seen[r.session] ?? 0) ? <span class="dot" role="img" aria-label="new report" /> : null}
+        </SessionLink>
+      ))}
       {bs.map((b) => {
         const changed = seen[b.id] !== b.version;
         return (
@@ -215,4 +236,19 @@ export function Sidebar({ boards, seen, shown, questions, session }) {
       })}
     </div>
   ));
+}
+
+export function Reports({ reports }) {
+  if (!reports.length) return null;
+  return (
+    <section class="reports" aria-label="Reports">
+      <h3>Reports</h3>
+      {reports.map((r) => (
+        <article key={r.time} data-time={r.time}>
+          <time dateTime={new Date(r.time).toISOString()}>{when(r.time)}</time>
+          <Md class="prose md" src={r.text} />
+        </article>
+      ))}
+    </section>
+  );
 }

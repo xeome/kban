@@ -24,8 +24,8 @@ person and the agents working alongside them.
     server.go   HTTP + SSE, file read/write, the 409 on an unreadable file
     file.go     update: the one way the file is written; create: a new one
     cli.go      the agent commands
-    mcp.go      `kban mcp`: grill's ask tool for an agent session, relayed to the hub
-    grill.go    grill questions: held asks, answers, acks, images, /s/{session}
+    mcp.go      `kban mcp`: grill's ask and report tools for an agent session, relayed to the hub
+    grill.go    grill questions: held asks, answers, acks, images, reports, /s/{session}
     push.go     the phone push through ntfy.sh, sent from the poll loop
     main.go     flags, serving or joining the hub on the port, browser opening
     ui/         embedded (go:embed) and served as is; app.js is built, never edited
@@ -68,7 +68,9 @@ person and the agents working alongside them.
   board.
 - Changes to the file are picked up by polling, within 500ms, and pushed
   over `/api/b/{id}/events` and `/api/s/{session}/events`, with the board
-  list as a named `boards` event and the open questions as `grill`.
+  list as a named `boards` event and the open questions and each session's
+  newest report line as `grill`; a `/s/{session}` stream's `grill` also
+  carries that session's reports.
   The sidebar is painted only by those events and when the tab shows again,
   never by render(). The page reopens its stream itself after any error
   and loads the board on every open, because Firefox gives up on a silent
@@ -78,8 +80,9 @@ person and the agents working alongside them.
   lands while you type without moving your caret. Every
   text field Preact owns is a `Field` (view.jsx), which goes uncontrolled
   while focused; always pass its `value`.
-- **File text and grill questions become markup only through `md()`,
-  `mdInline()` and `diagram()`;** everything else is JSX text. `md()`
+- **File text, grill questions and reports become markup only through `md()`,
+  `mdInline()` and `diagram()`;** everything else is JSX text. `Md` (view.jsx)
+  renders `md()` and, off the card face, hands each mermaid fence to `diagram()`. `md()`
   escapes HTML, renders an image as a link, and shows a link to anything
   but http(s) or mailto as plain text; `mdInline()` does the same for one
   line, so a "-" stays text. `diagram()` runs Mermaid under securityLevel
@@ -112,6 +115,7 @@ to load, a save that never landed, the hub's sidebar (a second kban joining,
 the change dot, a rename that lands before the switch), the notes
 swap, Markdown, one drag across columns, and grill questions (`grill`,
 `grill2`: answering, Ask and the lean, words kept when a question closes,
-hostile text and Mermaid, two relays of one session). It covers no drag
+hostile text and Mermaid, two relays of one session), and reports (`report`:
+a session's page and dot, diagrams in notes and comments, hostile Mermaid). It covers no drag
 within a column and no column drag: after touching the UI, do those by
 hand, then `cat` the file and confirm it says what the screen says.

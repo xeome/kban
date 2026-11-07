@@ -67,7 +67,7 @@ func fileID(path string) string {
 }
 
 // handler serves the 127.0.0.1 listener; tailnet serves the tailnet
-// address, where a phone answers questions but asks and acks none.
+// address, where a phone answers questions but asks, acks and reports none.
 func (h *hub) handler() http.Handler { return h.mux(true) }
 func (h *hub) tailnet() http.Handler { return h.mux(false) }
 
@@ -85,11 +85,12 @@ func (h *hub) mux(local bool) http.Handler {
 	mux.HandleFunc("POST /api/q/{token}/answer", h.answer)
 	mux.HandleFunc("GET /api/q/{token}/file/{path}", h.image)
 	mux.HandleFunc("POST /api/seen", func(w http.ResponseWriter, r *http.Request) { h.seen(w, r, local) })
-	ask, ack := h.ask, h.ack
+	ask, ack, report := h.ask, h.ack, h.report
 	if !local {
-		ask, ack = http.NotFound, http.NotFound
+		ask, ack, report = http.NotFound, http.NotFound, http.NotFound
 	}
 	mux.HandleFunc("POST /api/grill/ask", ask)
+	mux.HandleFunc("POST /api/grill/report", report)
 	mux.HandleFunc("POST /api/q/{token}/ack", ack)
 	files := http.FileServerFS(uiFS)
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {

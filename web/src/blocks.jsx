@@ -2,7 +2,7 @@ import { render } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { diagram } from './diagram.js';
 import { md, mdInline } from './md.js';
-import { Field } from './view.jsx';
+import { Field, Reports } from './view.jsx';
 
 // A grill question is an agent's text: every string reaches markup only
 // through md() (text blocks) or mdInline() (one-line fields and cells).
@@ -116,6 +116,7 @@ function Session({ s }) {
           ))}</ol>
         </section>
       ) : null}
+      <Reports reports={s.reports} />
     </>
   );
 }

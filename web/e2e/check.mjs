@@ -657,6 +657,7 @@ function relay(port, session) {
   call('initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'check', version: '0' } });
   return {
     ask: (q) => call('tools/call', { name: 'ask', arguments: q }),
+    report: (text) => call('tools/call', { name: 'report', arguments: { text } }),
     cancel: (rid) => p.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: rid } }) + '\n'),
     reply: async (rid, ms = 5000) => {
       for (const t0 = Date.now(); Date.now() - t0 < ms; await sleep(50)) {
@@ -915,6 +916,90 @@ if (run('grill2')) {
   const ans = await rb.reply(idb);
   check('B answered over HTTP, as the phone would, reaches B alone', res.status === 200 && ans?.kind === 'defer' && ans.words === 'from the phone' && await ra.reply(ida, 300) === null,
     `${res.status} ${JSON.stringify(ans)}`);
+}
+
+// --- reports: a session's reports on its page, diagrams drawn -----------------
+if (run('report')) {
+  const port = 4323;
+  const { f, p: bp } = await fresh(port, ['A']);
+  const base = `http://127.0.0.1:${port}`;
+  const sp = await tab(`${base}/s/rep-1`);
+  await sp.ev('window.__loaded = 1');
+  await bp.send('Page.bringToFront');
+  const row = '#side a.item.report[data-session="rep-1"]';
+  const dotted = `!!document.querySelector('${row} .dot')`;
+  const r = relay(port, 'rep-1');
+  r.report('## First\n\n```mermaid\nflowchart LR\n  A --> B\n```');
+  const drawn = await sp.until(`!!document.querySelector('.reports article svg')`, 20000) >= 0;
+  const hidden = await sp.ev(`document.visibilityState === 'hidden' && window.__loaded === 1`);
+  check('a first report reaches the hidden session tab without a reload, its diagram an SVG, and dots its session on the board tab and its own',
+    drawn && hidden && await bp.until(dotted) >= 0 && await sp.ev(dotted), `drawn=${drawn} hidden=${hidden} board=${await bp.ev(dotted)} own=${await sp.ev(dotted)}`);
+  const under = await bp.ev(`document.querySelector('${row}')?.closest('.group').querySelector('.head').textContent`);
+  check('a session that reports with no open question gets its own sidebar row under its project', under === path.basename(dir), under);
+
+  await sp.send('Page.bringToFront');
+  const cleared = await sp.until(`document.visibilityState === 'visible' && !!document.querySelector('${row}') && !${dotted}`) >= 0;
+  await bp.send('Page.bringToFront');
+  const boardCleared = await bp.until(`document.visibilityState === 'visible' && !${dotted}`) >= 0;
+  await bp.send('Page.reload');
+  const reloaded = await bp.until(`!!document.querySelector('${row}')`, 5000) >= 0 && !await bp.ev(dotted);
+  check('showing the session page clears the dot, on its tab and on the board tab, and a reload keeps it clear',
+    cleared && boardCleared && reloaded, `cleared=${cleared} board=${boardCleared} reloaded=${reloaded}`);
+
+  const t1 = await sp.ev(`document.querySelector('.reports article').dataset.time`);
+  await sp.ev(`document.querySelector('.reports article svg').__mark = 1`);
+  r.report('## Second\n\n```mermaid\nflowchart LR\n  C --> D\n```');
+  const back = await bp.until(dotted, 5000) >= 0;
+  const both = await sp.until(`document.querySelectorAll('.reports article svg').length === 2`, 20000) >= 0;
+  const kept = await sp.ev(`document.querySelector('.reports article[data-time="${t1}"] svg')?.__mark === 1 && document.querySelector('.reports article').dataset.time !== '${t1}'`);
+  check('a newer report with the session page hidden dots it again, lands above the first, and the first\'s diagram is the same node',
+    back && both && kept, `back=${back} both=${both} kept=${kept}`);
+
+  // z2a7gdgr's hostile diagrams.
+  let hits = 0;
+  const detector = http.createServer((req, res) => { hits++; res.end(); });
+  await new Promise((done) => detector.listen(4398, '127.0.0.1', done));
+  const fence = (src) => '```mermaid\n' + src + '\n```\n\n';
+  const control = 'flowchart LR\n  C --> D';
+  agent(f, (b) => {
+    card(b, 'A').notes = fence(control)
+      + fence('%%{init: {"securityLevel": "loose", "htmlLabels": true, "flowchart": {"htmlLabels": true}}}%%\nflowchart LR\n  A["<img src=http://127.0.0.1:4398/a onerror=window.__x=1>"] --> B')
+      + fence('flowchart LR\n  A --> B\n  click A "javascript:window.__x=1"');
+    card(b, 'A').comments = [comment(fence('sequenceDiagram\n  A->>B: <img src=http://127.0.0.1:4398/c onerror="window.__x=1">')
+      + fence('%%{init: {"themeCSS": "* { cursor: url(http://127.0.0.1:4398/t), auto }", "fontFamily": "x; cursor: url(http://127.0.0.1:4398/f), auto"}}%%\nflowchart LR\n  A --> B'))];
+  });
+  await bp.until(`!!document.querySelector('.card .meta')`);
+  await bp.click('.card .t');
+  const slots = `(() => { const d = [...document.querySelectorAll('#card .md .diagram')]; return d.length === 5 && d.every((x) => x.querySelector('svg, pre')); })()`;
+  const settled = await bp.until(slots, 20000) >= 0;
+  await bp.ev(`document.querySelectorAll('#card .md .diagram svg g').forEach((g) => g.dispatchEvent(new MouseEvent('click', { bubbles: true })))`);
+  await sleep(1500);
+  if (await bp.ev(`document.activeElement.id === 'card-notes'`)) await bp.key('Escape'); // a click on the notes view edits them
+  const safe = JSON.parse(await bp.ev(`JSON.stringify({ x: window.__x, onerror: document.querySelectorAll('[onerror]').length, img: document.querySelectorAll('#board img, #card img').length,
+    js: document.querySelectorAll('a[href^="javascript" i]').length, control: !!document.querySelector('${notesView} .diagram')?.querySelector('svg'),
+    face: !!document.querySelector('.card .b pre > code.language-mermaid') && !document.querySelector('.card .b .diagram') })`));
+  check('hostile diagrams in notes and a comment: the control draws, the face shows code, and nothing runs, loads or links to javascript:',
+    settled && safe.control && safe.face && safe.x === undefined && safe.onerror === 0 && safe.img === 0 && safe.js === 0 && hits === 0,
+    `settled=${settled} ${JSON.stringify(safe)} detector hits=${hits}`);
+  detector.close();
+
+  const size = `(() => { const v = document.querySelector('${notesView} .diagram svg')?.viewBox.baseVal; return v ? v.width + 'x' + v.height : ''; })()`;
+  const drawnSize = await bp.ev(size);
+  await bp.ev(`document.querySelector('${notesView} .diagram svg').__mark = 1`);
+  await bp.click(`${notesView} .diagram`);
+  check('a click on a diagram in the rendered notes edits their source',
+    await bp.ev(`document.activeElement.id === 'card-notes' && ${shown('#card-notes')} && !${shown(notesView)}`),
+    await bp.ev(`document.activeElement.id + ' ' + document.activeElement.tagName`));
+  // The save landing while they are typed in sets the hidden view's html again.
+  await bp.ev(`(() => { const t = document.activeElement; t.setSelectionRange(t.value.length, t.value.length); })()`);
+  await bp.type('\n\nmore');
+  await saved(bp);
+  const replaced = await bp.until(`!document.querySelector('${notesView} .diagram svg')?.__mark`) >= 0;
+  await bp.until(`!!document.querySelector('${notesView} .diagram svg')`, 2000); // a draw in the hidden view, if any, ends
+  await bp.key('Escape');
+  const redrawn = await bp.until(`${shown(notesView)} && ${size} === '${drawnSize}'`, 20000) >= 0;
+  check('a diagram in notes typed in while a save lands is drawn at its size once they show again',
+    drawnSize && replaced && redrawn, `${drawnSize} -> ${await bp.ev(size)} replaced=${replaced}`);
 }
 
 // --- pushes: only what the owner was not shown --------------------------------

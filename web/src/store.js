@@ -153,6 +153,7 @@ export function listen() {
   es.addEventListener('grill', (e) => {
     const ev = JSON.parse(e.data);
     questions = ev.open;
+    reports = ev.reports;
     side();
     if (ev.session) session(ev.session);
     tell();
@@ -185,14 +186,17 @@ function problem(error, text = `${S.file} can't be read: ${error}. Your changes 
 // tab shows again, never by render(), which selects inputs and scrolls.
 let boards = [];
 let questions = [];
+let reports = [];
 const acked = new Set();
 function side() {
+  const visible = document.visibilityState === 'visible';
   const seen = see((seen) => {
     for (const b of boards) {
-      if (!(b.id in seen) || (b.id === ID && document.visibilityState === 'visible')) seen[b.id] = b.version;
+      if (!(b.id in seen) || (b.id === ID && visible)) seen[b.id] = b.version;
     }
+    for (const r of reports) if (r.session === SESSION && visible) seen[r.session] = r.time;
   });
-  paint(h(Sidebar, { boards, seen, shown: ID, questions, session: SESSION }), $('#side'));
+  paint(h(Sidebar, { boards, seen, shown: ID, questions, reports, session: SESSION }), $('#side'));
   watch();
   // A question this sidebar shows needs no new tab, hidden or not. The
   // tailnet listener refuses the ack, so a phone never stops one opening.
@@ -211,13 +215,13 @@ function session(s) {
   const file = $('#file');
   file.textContent = src ? [src.task, src.project, src.branch].filter(Boolean).join(' · ') : 'An agent session';
   file.title = src?.path || '';
-  document.title = (asking ? '● ' : '') + (src ? `${src.task} · ${src.project}` : 'kban');
+  document.title = (asking ? '● ' : '') + (src ? [src.task, src.project].filter(Boolean).join(' · ') : 'kban'); // a session that only reported has no task
   status(asking ? 'asking' : 'idle', asking ? 'Waiting for your answer' : 'Waiting for the next question');
   showSession(s, $('#sess'));
 }
 
-// see changes the version of each board this browser last showed, shared by
-// its tabs, and returns them.
+// see changes the version of each board, and the newest report time of each
+// session, this browser last showed, shared by its tabs, and returns them.
 function see(edit) {
   let seen = {};
   try { seen = JSON.parse(localStorage.seen || '{}'); } catch {}

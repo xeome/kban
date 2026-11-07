@@ -49,6 +49,21 @@ type gsession struct {
 	sitting []*asked
 }
 
+// A report is keyed by its time in Unix ms, unique across the hub.
+type report struct {
+	Time             int64  `json:"time"`
+	Text             string `json:"text"`
+	session, project string
+}
+
+// The hub keeps the newest reportMax reports of all its sessions in one list,
+// in memory: a restart loses them, as it loses the sitting. Every grill event
+// carries the list, so a report's text is capped.
+const (
+	reportMax  = 50
+	reportText = 64 << 10
+)
+
 type gsource struct {
 	Project string `json:"project"`
 	Path    string `json:"path"`
@@ -452,6 +467,47 @@ func (h *hub) ask(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (h *hub) report(w http.ResponseWriter, r *http.Request) {
+	if !jsonOnly(r) { // as ask
+		http.Error(w, "Content-Type: application/json", http.StatusUnsupportedMediaType)
+		return
+	}
+	var req struct{ Session, Cwd, Text string }
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)).Decode(&req); err != nil {
+		http.Error(w, "body: "+err.Error(), 400)
+		return
+	}
+	if req.Session == "" || strings.TrimSpace(req.Text) == "" {
+		http.Error(w, "session and text: required", 400)
+		return
+	}
+	if len(req.Text) > reportText {
+		http.Error(w, fmt.Sprintf("text: %d KiB, more than the %d KiB a report holds", len(req.Text)>>10, reportText>>10), 400)
+		return
+	}
+	src := where(req.Cwd)
+	h.mu.Lock()
+	t := time.Now().UnixMilli()
+	if n := len(h.reports); n > 0 {
+		t = max(t, h.reports[n-1].Time+1)
+	}
+	if len(h.reports) == reportMax {
+		h.reports = slices.Delete(h.reports, 0, 1) // which clears the freed slot: the dropped text goes
+	}
+	h.reports = append(h.reports, report{Time: t, Text: req.Text, session: req.Session, project: src.Project})
+	s := h.sessions[req.Session]
+	if s == nil {
+		s = &gsession{}
+		h.sessions[req.Session] = s
+	}
+	if s.source == nil { // an ask's source names its task, so it stays
+		s.source = &src
+	}
+	h.grillChangedLocked()
+	h.mu.Unlock()
+	io.WriteString(w, "http://"+r.Context().Value(http.LocalAddrContextKey).(net.Addr).String()+"/s/"+url.PathEscape(req.Session))
+}
+
 func (h *hub) answer(w http.ResponseWriter, r *http.Request) {
 	var v any
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
@@ -563,6 +619,12 @@ type openLine struct {
 	Question any    `json:"question"`
 }
 
+type reportLine struct {
+	Session string `json:"session"`
+	Project string `json:"project"`
+	Time    int64  `json:"time"`
+}
+
 type sittingLine struct {
 	ID       string  `json:"id"`
 	Question any     `json:"question"`
@@ -579,9 +641,17 @@ type shownQuestion struct {
 
 func (h *hub) grillEventLocked(session string) []byte {
 	ev := struct {
-		Open    []openLine `json:"open"`
-		Session any        `json:"session,omitempty"`
-	}{Open: []openLine{}}
+		Open    []openLine   `json:"open"`
+		Reports []reportLine `json:"reports"`
+		Session any          `json:"session,omitempty"`
+	}{Open: []openLine{}, Reports: []reportLine{}}
+	reported := map[string]bool{}
+	for _, rep := range slices.Backward(h.reports) {
+		if !reported[rep.session] {
+			reported[rep.session] = true
+			ev.Reports = append(ev.Reports, reportLine{rep.session, rep.project, rep.Time})
+		}
+	}
 	for _, sid := range slices.Sorted(maps.Keys(h.sessions)) {
 		s := h.sessions[sid]
 		for _, e := range s.sitting {
@@ -595,7 +665,13 @@ func (h *hub) grillEventLocked(session string) []byte {
 			Source    *gsource        `json:"source"`
 			Sitting   []sittingLine   `json:"sitting"`
 			Questions []shownQuestion `json:"questions"`
-		}{Sitting: []sittingLine{}, Questions: []shownQuestion{}}
+			Reports   []report        `json:"reports"`
+		}{Sitting: []sittingLine{}, Questions: []shownQuestion{}, Reports: []report{}}
+		for _, rep := range slices.Backward(h.reports) {
+			if rep.session == session {
+				out.Reports = append(out.Reports, rep)
+			}
+		}
 		if s := h.sessions[session]; s != nil {
 			out.Source = s.source
 			for _, e := range s.sitting {
