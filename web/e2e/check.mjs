@@ -21,9 +21,17 @@ const check = (name, ok, detail = '') => {
 const procs = [];
 process.on('exit', () => procs.forEach((p) => p.kill('SIGKILL')));
 
-const env = { ...process.env, XDG_CONFIG_HOME: dir };
-async function server(file, port) {
-  const p = spawn(bin, ['-no-open', '-p', String(port), file], { stdio: ['ignore', 'pipe', 'inherit'], env });
+// A fake xdg-open logs the tabs a hub opens, and a failing tailscale keeps
+// every hub off the tailnet, so none pushes to the owner's phone.
+const fakes = path.join(dir, 'bin');
+const opened = path.join(dir, 'opened.log');
+fs.mkdirSync(fakes);
+fs.writeFileSync(path.join(fakes, 'xdg-open'), `#!/bin/sh\necho "$1" >> ${opened}\n`, { mode: 0o755 });
+fs.writeFileSync(path.join(fakes, 'tailscale'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+const tabsOpened = () => (fs.existsSync(opened) ? fs.readFileSync(opened, 'utf8').split('\n').filter(Boolean) : []);
+const env = { ...process.env, XDG_CONFIG_HOME: dir, PATH: `${fakes}:${process.env.PATH}` };
+async function server(file, port, open = false) {
+  const p = spawn(bin, [...(open ? [] : ['-no-open']), '-p', String(port), file], { stdio: ['ignore', 'pipe', 'inherit'], env });
   procs.push(p);
   let out = '';
   return new Promise((r) => p.stdout.on('data', (d) => { out += d; const url = out.match(/^http\S+$/m); if (url) r(url[0]); }));
@@ -76,7 +84,7 @@ async function tab(url) {
         return -1;
       };
       await send('Page.bringToFront'); // a native drag starts only in the foreground tab, and earlier steps open others
-      await until('document.readyState === "complete" && !!document.querySelector(".col, #problem:not([hidden])")', 5000);
+      await until('document.readyState === "complete" && !!document.querySelector(".col, #problem:not([hidden]), #sess > *")', 5000);
       // A real mouse click at the element's centre; false when there is no such element.
       const click = async (sel) => {
         const at = await ev(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); if (!e) return null; e.scrollIntoView({ block: 'nearest' }); const r = e.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()`);
@@ -109,10 +117,10 @@ const board = (todo) => ({ instructions: 'test', columns: [
 // past the 300ms save debounce, then until the save has landed
 const saved = async (p) => { await sleep(400); return p.until('document.querySelector("#status").dataset.state === "saved" && document.querySelector("#status").textContent === "saved"', 4000); };
 
-async function fresh(port, todo) {
+async function fresh(port, todo, open = false) {
   const f = path.join(dir, `b${port}.json`);
   fs.writeFileSync(f, JSON.stringify(board(todo), null, 2));
-  const url = await server(f, port);
+  const url = await server(f, port, open);
   const k = procs.at(-1);
   const p = await tab(url);
   await p.until(`document.querySelectorAll('.card').length === ${todo.length}`);
@@ -632,6 +640,281 @@ if (run('drag')) {
   check('after a drag, leaving the notes by keyboard shows them rendered',
     await p.until(`document.activeElement.id !== 'card-notes' && ${shown(notesView)} && !document.querySelector('.notes.held')`, 1000) >= 0, // past the dialog's fade-in
     await p.ev(`document.activeElement.id + ' held=' + !!document.querySelector('.notes.held')`));
+}
+
+// --- grill: an agent session's question, answered in the hub -------------------
+function relay(port, session) {
+  const p = spawn(bin, ['mcp', '-p', String(port)], { env: { ...env, CLAUDE_CODE_SESSION_ID: session }, cwd: dir, stdio: ['pipe', 'pipe', 'inherit'] });
+  procs.push(p);
+  const got = new Map();
+  let buf = '';
+  let id = 0;
+  p.stdout.on('data', (d) => {
+    buf += d;
+    for (let i; (i = buf.indexOf('\n')) >= 0; buf = buf.slice(i + 1)) { const m = JSON.parse(buf.slice(0, i)); if (m.id) got.set(m.id, m); }
+  });
+  const call = (method, params) => { p.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: ++id, method, params }) + '\n'); return id; };
+  call('initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'check', version: '0' } });
+  return {
+    ask: (q) => call('tools/call', { name: 'ask', arguments: q }),
+    cancel: (rid) => p.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: rid } }) + '\n'),
+    reply: async (rid, ms = 5000) => {
+      for (const t0 = Date.now(); Date.now() - t0 < ms; await sleep(50)) {
+        const r = got.get(rid)?.result;
+        if (r) return r.isError ? { error: r.content[0].text } : JSON.parse(r.content[0].text);
+      }
+      return null;
+    },
+    stop: () => new Promise((r) => { p.once('exit', r); p.stdin.end(); }),
+  };
+}
+const small = (id, labels, hard = false) => ({ id, task: 'grill in the hub', question: `Which way for ${id}?`,
+  ...(hard ? { hard_to_undo: true } : { hard_to_undo: false, say_ok: 'take the first' }), today: 'Today.', problem: 'Problem.',
+  options: labels.map((label) => ({ label, get: 'g', cost: 'c', undo: 'u' })) });
+const q1 = (id) => `document.querySelector('.q[data-q="${id}"]')`;
+const allDrawn = `[...document.querySelectorAll('.blk[data-kind=diagram]')].every((d) => d.querySelector('svg'))`;
+const CLIPS = `[...document.querySelectorAll('.panel, .panel *')].filter((e) => !e.closest('.scroll, svg') && e.clientWidth > 0 && e.clientHeight > 0
+  && e.scrollWidth > e.clientWidth + 1).map((e) => (e.className || e.tagName) + ' ' + e.scrollWidth + '>' + e.clientWidth)`;
+// A settled page stays still: a class or style change after layout means two rules feed each other.
+const STILL = `new Promise((res) => { const seen = []; const mo = new MutationObserver((ms) => ms.forEach((m) => seen.push((m.target.className?.baseVal ?? m.target.className) + ' ' + m.attributeName)));
+  mo.observe(document.body, { attributes: true, subtree: true, attributeFilter: ['class', 'style'] }); setTimeout(() => { mo.disconnect(); res(seen); }, 3000); })`;
+// Grain and glow are background images; motion is a transition.
+const DECOR = `JSON.stringify({ coarse: matchMedia('(pointer: coarse)').matches, body: getComputedStyle(document.body).backgroundImage,
+  panel: getComputedStyle(document.querySelector('.panel')).backgroundImage, opt: getComputedStyle(document.querySelector('.opt')).transitionDuration })`;
+const decorated = (b) => b.includes('url(') && b.includes('radial-gradient');
+
+if (run('grill')) {
+  const png = path.join(dir, 'shot.png');
+  fs.writeFileSync(png, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYPgPAAEDAQB6OsbwAAAAAElFTkSuQmCC', 'base64'));
+  // Long unbroken tokens, which only overflow-wrap breaks at 390px.
+  const every = { ...small('D1', ['Postgres', 'Redis', 'MemoryWithWriteBehindToTheSecondaryRegionOnEveryCommit']), task: 'session store', n: 2, total: 5,
+    question: 'Which store **holds** sessions, `SessionStore.persistAcrossRestartsWithReplication()`?',
+    evidence: ['web/src/components/question/composer/keyboard-shortcuts.jsx:141 binds the keys', 'ui/settings.js:41 opens a modal', 'a plain note'],
+    context: [
+      { kind: 'text', title: 'What changes', text: '- **Filters** apply live\n- `localStorage` goes' },
+      { kind: 'code', title: 'ui/settings.js', lang: 'js', code: 'if (a < b && c) open();' },
+      { kind: 'table', columns: ['Session', 'Opens'], rows: [['2026-10-04', '6'], ['2026-10-05', '-']] },
+      { kind: 'diagram', title: 'Where an answer goes', mermaid: 'flowchart LR\n  U[your answer] --> S[server memory]\n  S --> M[model, as the tool result]\n  M --> L[ship ledger or commit body]' },
+    ],
+    rows: [{ label: 'Latency', cells: ['1 ms', '0.2 ms', '-'] },
+      { label: 'Flow', cells: ['B', 'C', 'D'].map((x) => ({ kind: 'diagram', mermaid: `flowchart TB\n  A[answer] --> ${x}[model]` })) }],
+    detail: [{ kind: 'diff', diff: '--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n--a\n+++b\n keep' }, { kind: 'image', title: 'Today', path: png },
+      { kind: 'stats', items: [{ label: 'Opens', value: '5.4', note: 'median' }, { label: 'Closes', value: '2' }] }] };
+  // This hub opens tabs, as the owner's does: its board's at start, and a question's that no tab acks.
+  const { f, p: board, k } = await fresh(4320, ['A'], true);
+  const port = 4320;
+  const base = `http://127.0.0.1:${port}`;
+  await fetch('http://127.0.0.1:9339/json/new?about:blank', { method: 'PUT' });
+  await sleep(300);
+  const r = relay(port, 'sess-1');
+  let rid = r.ask(every);
+  const badge = await board.until(`!!document.querySelector('#side a.item.ask[href="/s/sess-1"] .badge')`, 3000);
+  const project = await board.ev(`[...document.querySelectorAll('#side .group')].find((g) => g.querySelector('a.item.ask'))?.querySelector('.head').textContent`);
+  await sleep(4000);
+  check('a question reaches a hidden board tab\'s sidebar under its project, with a badge, and no tab opens after 4s',
+    await board.ev('document.visibilityState') === 'hidden' && badge >= 0 && project === path.basename(dir) && !tabsOpened().some((u) => u.includes('/s/')),
+    `visibility=${await board.ev('document.visibilityState')} badge=${badge} project=${project} opened=${tabsOpened()} refused=${JSON.stringify(await r.reply(rid, 1))}`);
+
+  const p = await tab(`${base}/s/sess-1`);
+  await p.until(q1('D1'));
+  await p.until(allDrawn, 20000);
+  const missing = await p.ev(`(() => { const want = ${JSON.stringify([
+    ['context[0]', 'Filters apply live'], ['context[1]', 'if (a < b && c) open();'], ['context[2]', '2026-10-05'], ['detail[2]', 'median'],
+    ['rows[0].cells[2]', '-'], ['options[1].cost', 'c'], ['detail[0]', '+b'], ['detail[1]', ''],
+  ])};
+    const out = want.filter(([p, t]) => !document.querySelector('[data-path="' + p + '"]')?.textContent.includes(t)).map(([p]) => p);
+    if (!document.querySelector('[data-path="detail[1]"] img')?.getAttribute('src').endsWith('/file/' + encodeURIComponent('detail[1]'))) out.push('detail[1] img');
+    for (const p of ['context[3]', 'rows[1].cells[0]', 'rows[1].cells[2]']) if (!document.querySelector('[data-path="' + p + '"] svg')) out.push(p + ' svg');
+    if (document.querySelector('[data-path="rows[0].cells[2]"] li, [data-path="context[2]"] td li')) out.push('a "-" became a list');
+    if (!document.querySelector('[data-path="context[0]"] li strong')) out.push('context[0] markdown');
+    return out; })()`);
+  check('every block kind renders, Markdown in text, "-" in a cell as text', missing.length === 0, JSON.stringify(missing));
+  check('the header names the task, project and the page is the session\'s',
+    await p.ev(`document.querySelector('#file').textContent`) === `session store · ${path.basename(dir)}` && (await p.ev('document.title')).startsWith('● session store'),
+    await p.ev(`document.querySelector('#file').textContent + ' | ' + document.title`));
+
+  await sleep(1000);
+  const moved = await p.ev(STILL);
+  check('a page with diagrams stays still for 3s once settled', moved.length === 0, JSON.stringify(moved.slice(0, 8)));
+  // The theme toggle draws the diagrams again in the new tokens: Mermaid writes colours, not var().
+  const fill = `getComputedStyle(document.querySelector('[data-path="context[3]"] svg .node rect, [data-path="context[3]"] svg .node path')).fill`;
+  const fill0 = await p.ev(fill);
+  await p.click('#theme');
+  const redrawn = await p.until(`${fill} !== ${JSON.stringify(fill0)}`, 3000);
+  check('the theme toggle redraws a diagram in the new colours', redrawn >= 0, `fill stayed ${fill0}`);
+  await p.click('#theme');
+  await p.until(`${fill} === ${JSON.stringify(fill0)}`, 3000);
+  const fine = JSON.parse(await p.ev(DECOR));
+  check('a fine pointer keeps grain, glow and motion', !fine.coarse && decorated(fine.body) && decorated(fine.panel) && fine.opt !== '0s', JSON.stringify(fine));
+
+  // Mermaid draws in the diagram's own box, never in one it mounts on body: body is a flex row,
+  // and such a box squeezed the panel for frames in Firefox. Headless Chromium paints no frame
+  // between mount and removal, so the box itself is what is watched.
+  await p.send('Page.enable');
+  const { identifier } = (await p.send('Page.addScriptToEvaluateOnNewDocument', { source: `window.__onBody = []; addEventListener('DOMContentLoaded', () =>
+    new MutationObserver((ms) => ms.forEach((m) => m.addedNodes.forEach((n) => n.querySelector?.('svg') && __onBody.push(n.id || n.tagName)))).observe(document.body, { childList: true }));` })).result;
+  await p.send('Page.reload');
+  await p.until(q1('D1'), 5000);
+  await p.until(allDrawn, 20000);
+  const onBody = await p.ev('window.__onBody');
+  check('no diagram is drawn in a box mounted on body', onBody.length === 0, JSON.stringify(onBody));
+  await p.send('Page.removeScriptToEvaluateOnNewDocument', { identifier });
+  await p.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+  await p.send('Page.reload');
+  await p.until(q1('D1'), 5000);
+  await p.until(allDrawn, 20000);
+  await p.ev(`document.querySelectorAll('details').forEach((d) => d.open = true)`);
+  await sleep(500);
+  const clips = await p.ev(CLIPS);
+  check('nothing clips at 390px', clips.length === 0, clips.slice(0, 8).join('; '));
+  await p.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+  await p.send('Page.reload');
+  await p.until(q1('D1'), 5000);
+  const coarse = JSON.parse(await p.ev(DECOR));
+  check('a coarse pointer has no grain, glow or motion', coarse.coarse && !decorated(coarse.body) && !decorated(coarse.panel) && coarse.opt === '0s', JSON.stringify(coarse));
+  await p.send('Emulation.setTouchEmulationEnabled', { enabled: false });
+  await p.send('Emulation.clearDeviceMetricsOverride');
+  await p.send('Page.reload');
+  await p.until(q1('D1'), 5000);
+
+  await p.click('.opt[data-i="1"]');
+  await p.click('.words');
+  await p.type('a [b] "c" <d>');
+  await p.key('Enter', { ctrl: true });
+  let a = await r.reply(rid);
+  check('the page sends B with the words verbatim', a?.kind === 'option' && a.option === 'B' && a.label === 'Redis' && a.words === 'a [b] "c" <d>', JSON.stringify(a));
+  check('then it waits for the next question and lists the answer in the sitting',
+    await p.until(`document.querySelector('#sess .msg h2')?.textContent === 'Sent.' && document.querySelector('.sit[data-id="D1"] .ans')?.textContent.includes('B · Redis')`) >= 0);
+
+  const show = async (q) => { const id = r.ask(q); await p.until(`${q1(q.id)} && ${q1(q.id)}.querySelector('.opt')`, 5000); await sleep(100); return id; };
+  const pressed = (id) => p.ev(`[...${q1(id)}.querySelectorAll('.opt')].findIndex((o) => o.getAttribute('aria-checked') === 'true')`);
+  rid = await show(small('K1', ['North', 'South', 'East']));
+  await p.ev(`${q1('K1')}.querySelector('[data-ask]').click()`);
+  a = await r.reply(rid);
+  check('Ask with nothing picked', a?.kind === 'ask' && a.option === null && a.words === '', JSON.stringify(a));
+  rid = await show(small('K1', ['North', 'South', 'East']));
+  await p.click('.opt[data-i="1"]');
+  await p.click('.words');
+  await p.type('why "B", not [A]');
+  await p.ev(`${q1('K1')}.querySelector('[data-ask]').click()`);
+  a = await r.reply(rid);
+  check('Ask with B and words sends B as a lean', a?.kind === 'ask' && a.option === 'B' && a.label === 'South' && a.words === 'why "B", not [A]', JSON.stringify(a));
+  rid = await show(small('K1', ['North', 'East', 'South']));
+  const leaned = await pressed('K1');
+  await p.ev(`${q1('K1')}.querySelector('.answer .primary').click()`);
+  a = await r.reply(rid);
+  check('the re-ask preselects the lean by its label', leaned === 2 && a?.kind === 'option' && a.option === 'C' && a.label === 'South', `${leaned} ${JSON.stringify(a)}`);
+  rid = await show(small('K2', ['South', 'North'], true));
+  await p.click('.opt[data-i="0"]');
+  await p.ev(`${q1('K2')}.querySelector('[data-ask]').click()`);
+  await r.reply(rid);
+  rid = await show(small('K2', ['North', 'South'], true));
+  const hardLean = [await pressed('K2'), await p.ev(`${q1('K2')}.querySelector('.echo').textContent`)];
+  await p.click('.opt[data-i="1"]');
+  await p.ev(`${q1('K2')}.querySelector('.answer .primary').click()`);
+  check('a hard-to-undo re-ask names the lean but picks nothing, and Send without a why shows the server\'s message',
+    hardLean[0] === -1 && hardLean[1].includes('South') && await p.until(`${q1('K2')}.querySelector('.status').textContent.includes('why')`) >= 0,
+    JSON.stringify(hardLean) + ' ' + await p.ev(`${q1('K2')}.querySelector('.status').textContent`));
+
+  await p.click('.words');
+  await p.type('cancelled words');
+  r.cancel(rid);
+  check('a cancel in the terminal keeps the typed words',
+    await p.until(`!document.querySelector('.q') && document.querySelector('.unsent')?.textContent.includes('Your unsent words for K2') && document.querySelector('.unsent pre').textContent === 'cancelled words'`) >= 0);
+  rid = await show(small('Q6', ['North', 'South']));
+  await p.click('.words');
+  await p.type('restart words');
+  k.kill('SIGKILL');
+  await new Promise((done) => k.once('exit', done));
+  await server(f, port);
+  a = await r.reply(rid);
+  check('a hub restart mid-question: the call gets the hub error, the page waits and keeps the words',
+    a?.error?.startsWith('kban hub not reachable') && await p.until(`!document.querySelector('.q') && document.querySelector('#sess .msg') && [...document.querySelectorAll('.unsent pre')].some((e) => e.textContent === 'restart words')`, 6000) >= 0,
+    JSON.stringify(a));
+  await show(small('Q7', ['North', 'South']));
+  await p.click('.words');
+  await p.type('last words');
+  await r.stop();
+  check('a session that ended shows waiting, with the words kept',
+    await p.until(`!document.querySelector('.q') && document.querySelector('#sess .msg') && [...document.querySelectorAll('.unsent pre')].some((e) => e.textContent === 'last words')`, 3000) >= 0
+      && !await p.ev(`/ended|gone/i.test(document.querySelector('#sess').textContent)`));
+  const never = await tab(`${base}/s/never-seen`);
+  check('a session never seen shows as waiting', await never.until(`document.querySelector('#sess .msg h2')?.textContent === 'No question open.'`) >= 0);
+
+  let hits = 0;
+  const detector = http.createServer((req, res) => { hits++; res.end(); });
+  await new Promise((done) => detector.listen(4399, '127.0.0.1', done));
+  const X = '<img src=x onerror="window.__x=1"> [j](javascript:window.__x=1) <img src=http://127.0.0.1:4399/f>';
+  const H = '<img src=x onerror="window.__x=1">';
+  const blk = (b) => ({ title: X, ...b });
+  const hostile = { id: 'H1', task: H, question: X, say_ok: X, hard_to_undo: false, today: X, problem: X, evidence: [X, `a.js:1 ${X}`],
+    context: [blk({ kind: 'text', text: X }), blk({ kind: 'code', lang: X, code: X }), blk({ kind: 'table', columns: [X], rows: [[X]] }),
+      blk({ kind: 'diagram', mermaid: '%%{init: {"securityLevel": "loose", "htmlLabels": true, "flowchart": {"htmlLabels": true}}}%%\nflowchart LR\n  A["<img src=http://127.0.0.1:4399/a onerror=window.__x=1>"] --> B' })],
+    options: [{ label: X, get: X, cost: X, undo: X }, { label: H, get: H, cost: H, undo: H }],
+    rows: [{ label: X, cells: [X, X] }, { label: 'Flow', cells: [
+      blk({ kind: 'diagram', mermaid: 'flowchart LR\n  A --> B\n  click A "javascript:window.__x=1"' }),
+      blk({ kind: 'diagram', mermaid: 'sequenceDiagram\n  A->>B: <img src=http://127.0.0.1:4399/c onerror="window.__x=1">' })] },
+    { label: 'Theme', cells: [
+      blk({ kind: 'diagram', mermaid: '%%{init: {"themeCSS": "* { cursor: url(http://127.0.0.1:4399/t), auto }", "fontFamily": "x; cursor: url(http://127.0.0.1:4399/f), auto"}}%%\nflowchart LR\n  A --> B' }),
+      blk({ kind: 'diagram', mermaid: 'flowchart LR\n  C --> D' })] }],
+    detail: [blk({ kind: 'diff', diff: X }), blk({ kind: 'stats', items: [{ label: X, value: X, note: X }] })] };
+  const r2 = relay(port, 'hostile');
+  rid = r2.ask(hostile);
+  const hp = await tab(`${base}/s/hostile`);
+  if (await hp.until(q1('H1'), 5000) < 0) throw new Error(`the hostile question was refused: ${JSON.stringify(await r2.reply(rid, 1))}`);
+  await hp.until(allDrawn, 20000);
+  await hp.ev(`document.querySelectorAll('details').forEach((d) => d.open = true)`);
+  await hp.ev(`document.querySelectorAll('.blk[data-kind=diagram] svg g').forEach((g) => g.dispatchEvent(new MouseEvent('click', { bubbles: true })))`);
+  await sleep(1500);
+  const safe = JSON.parse(await hp.ev(`JSON.stringify({ x: window.__x, onerror: document.querySelectorAll('[onerror]').length, img: document.querySelectorAll('#sess img, #side img').length,
+    js: document.querySelectorAll('a[href^="javascript" i]').length, text: document.querySelector('.q h1').textContent.includes('onerror') })`));
+  check('a hostile question renders its HTML as text: nothing runs, loads or links to javascript:',
+    safe.x === undefined && safe.onerror === 0 && safe.img === 0 && safe.js === 0 && safe.text && hits === 0, `${JSON.stringify(safe)} detector hits=${hits}`);
+  r2.cancel(rid);
+  detector.close();
+}
+
+// --- two relays of one session ask the same id --------------------------------
+if (run('grill2')) {
+  const port = 4321;
+  await fresh(port, ['A']);
+  const base = `http://127.0.0.1:${port}`;
+  const ra = relay(port, 'twin');
+  const rb = relay(port, 'twin');
+  const q = small('K1', ['North', 'South', 'East']);
+  let ida = ra.ask(q);
+  const p = await tab(`${base}/s/twin`);
+  await p.until(`!!document.querySelector('.q[data-q="K1"] .opt')`);
+  await p.click('.opt[data-i="1"]');
+  await p.ev(`document.querySelector('.q [data-ask]').click()`);
+  await ra.reply(ida);
+  await p.until(`!document.querySelector('.q')`);
+  ida = ra.ask(q); // A re-asks K1 with its lean
+  await p.until(`document.querySelectorAll('.q').length === 1`);
+  const idb = rb.ask(q);
+  await p.until(`document.querySelectorAll('.q').length === 2`);
+  await p.ev(`window.__a = document.querySelectorAll('.q')[0]; window.__b = document.querySelectorAll('.q')[1]; window.__bw = __b.querySelector('.words'); window.__tb = __b.dataset.token`);
+  const pick = (who) => p.ev(`[...${who}.querySelectorAll('.opt')].findIndex((o) => o.getAttribute('aria-checked') === 'true')`);
+  const lean = [await pick('__a'), await pick('__b')];
+  await p.ev(`__b.querySelector('.words').focus()`);
+  await p.type('words for B');
+  await p.ev(`__bw.setSelectionRange(3, 5)`);
+  await p.ev(`__a.querySelector('.words').focus()`);
+  await p.type('words for A');
+  ra.cancel(ida);
+  await p.until(`document.querySelectorAll('.q').length === 1`);
+  for (const ch of '3x') await p.key(ch);
+  await sleep(200);
+  const b = JSON.parse(await p.ev(`JSON.stringify({ same: document.querySelector('.q .words') === __bw, value: __bw.value, sel: [__bw.selectionStart, __bw.selectionEnd],
+    unsent: [...document.querySelectorAll('.unsent pre')].map((e) => e.textContent), pick: [...document.querySelector('.q').querySelectorAll('.opt')].findIndex((o) => o.getAttribute('aria-checked') === 'true') })`));
+  check('A\'s re-ask leans to South and B, asking the same id, leans to nothing', lean[0] === 1 && lean[1] === -1, JSON.stringify(lean));
+  check('cancelling A keeps B\'s words and caret, shows A\'s as unsent, and keys typed after A left do nothing',
+    b.same && b.value === 'words for B' && b.sel.join() === '3,5' && JSON.stringify(b.unsent) === '["words for A"]' && b.pick === -1, JSON.stringify(b));
+  const tb = await p.ev('__tb');
+  const res = await fetch(`${base}/api/q/${tb}/answer`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'defer', words: 'from the phone' }) });
+  const ans = await rb.reply(idb);
+  check('B answered over HTTP, as the phone would, reaches B alone', res.status === 200 && ans?.kind === 'defer' && ans.words === 'from the phone' && await ra.reply(ida, 300) === null,
+    `${res.status} ${JSON.stringify(ans)}`);
 }
 
 // --- screenshots for a look ----------------------------------------------------

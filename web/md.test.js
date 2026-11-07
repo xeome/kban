@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { md } from './src/md.js';
+import { md, mdInline } from './src/md.js';
 
 test.each([
   ['bold', 'a **b** c', '<p>a <strong>b</strong> c</p>'],
@@ -34,5 +34,24 @@ test.each([
   expect(html).toContain(shown);
   expect(html).not.toContain('<img');
   expect(html).not.toContain('<script');
+  for (const [, href] of html.matchAll(/href="([^"]*)"/g)) expect(href).toMatch(/^(https?:|mailto:)/);
+});
+
+test.each([
+  ['a dash', '-', '-'],
+  ['a numbered start', '1. first', '1. first'],
+  ['a heading mark', '# not a heading', '# not a heading'],
+  ['inline marks', 'a **b** `c`', 'a <strong>b</strong> <code>c</code>'],
+])('mdInline: %s', (_, src, html) => {
+  expect(mdInline(src)).toBe(html);
+});
+
+test.each([
+  ['raw HTML', '<img src=x onerror="window.__x=1">'],
+  ['javascript link', '[a](javascript:alert(1))'],
+  ['image', '![a](http://x/y.png)'],
+])('mdInline never emits markup from %s', (_, src) => {
+  const html = mdInline(src);
+  expect(html).not.toContain('<img');
   for (const [, href] of html.matchAll(/href="([^"]*)"/g)) expect(href).toMatch(/^(https?:|mailto:)/);
 });

@@ -49,6 +49,9 @@ func starter(name string) Board {
 const childEnv = "KBAN_DETACHED"
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "mcp" {
+		os.Exit(mcp(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
+	}
 	if len(os.Args) > 1 && commands[os.Args[1]] != "" {
 		os.Exit(cli(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 	}
@@ -56,7 +59,7 @@ func main() {
 	noOpen := flag.Bool("no-open", false, "do not open a browser")
 	detached := flag.Bool("d", false, "run the hub in the background; with no file, start it alone")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: kban [flags] [board.json]\n       kban show|add|move|set|comment|init [-f board.json] ...\n\n"+
+		fmt.Fprintf(os.Stderr, "usage: kban [flags] [board.json]\n       kban show|add|move|set|comment|init [-f board.json] ...\n       kban mcp [-p port]   grill's ask tool for an agent session, answered in the hub\n\n"+
 			"A board is a JSON file of columns and cards. Default file: TODO.json\n"+
 			"One kban serves every board listed in ~/.config/kban/boards; kban board.json adds it there.\n\n")
 		flag.PrintDefaults()
@@ -108,7 +111,7 @@ func run(path string, port int, browse, detached bool) error {
 	if ln == nil { // a hub serves this port: one already running, or the one just detached
 		return nil
 	}
-	return serve(ln, registry)
+	return serve(ln, registry, browse)
 }
 
 func claim(port int, path string) (net.Listener, string, error) {
@@ -152,10 +155,12 @@ func detach(port int) (int, error) {
 	return 0, fmt.Errorf("the background kban (pid %d) did not answer on port %d within 2s", p.Pid, port)
 }
 
-func serve(ln net.Listener, registry string) error {
+func serve(ln net.Listener, registry string, browse bool) error {
 	h := newHub(registry, currentUser())
+	if !browse {
+		h.browse = func(string) {}
+	}
 	go h.watch()
-	handler := h.handler()
 	// The tailnet address too, so the boards open from the owner's other
 	// devices. Never 0.0.0.0.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -167,10 +172,13 @@ func serve(ln net.Listener, registry string) error {
 		if tln, err := net.Listen("tcp", net.JoinHostPort(ip.String(), port)); err != nil {
 			fmt.Fprintln(os.Stderr, "kban: not on the tailnet:", err)
 		} else {
-			go http.Serve(tln, handler)
+			h.mu.Lock()
+			h.tail = "http://" + tln.Addr().String()
+			h.mu.Unlock()
+			go http.Serve(tln, h.tailnet())
 		}
 	}
-	return http.Serve(ln, handler)
+	return http.Serve(ln, h.handler())
 }
 
 func openBrowser(url string) {
@@ -181,5 +189,8 @@ func openBrowser(url string) {
 	case "windows":
 		args = []string{"rundll32", "url.dll,FileProtocolHandler", url}
 	}
-	exec.Command(args[0], args[1:]...).Start() // best effort; the URL is printed anyway
+	cmd := exec.Command(args[0], args[1:]...)
+	if cmd.Start() == nil { // best effort; the URL is printed anyway
+		go cmd.Wait() // the hub opens one per unacked question, so it reaps each
+	}
 }

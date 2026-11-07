@@ -15,7 +15,7 @@ const Down = () => <svg viewBox="0 0 16 16"><path d="M4.5 6l3.5 3.5 3.5-3.5" /><
 // so an agent's edit landing as you type leaves your text and caret. The
 // value key must always be passed; Preact skips an undefined value but
 // would clear the field if the key were dropped.
-function Field({ tag: Tag = 'input', value, ...props }) {
+export function Field({ tag: Tag = 'input', value, ...props }) {
   const ref = useRef();
   const focused = !!ref.current && ref.current === document.activeElement;
   return <Tag ref={ref} {...props} value={focused ? undefined : value} />;
@@ -180,15 +180,34 @@ export function CardBody() {
   );
 }
 
-export function Sidebar({ boards, seen, shown }) {
-  const projects = Map.groupBy(boards, (b) => b.project);
-  return [...projects].map(([project, bs]) => (
+// Projects are the union of the boards' and the open questions', so a repo
+// with no board still shows its agent's question.
+export function Sidebar({ boards, seen, shown, questions, session }) {
+  const projects = new Map();
+  const group = (p) => projects.get(p) || projects.set(p, { boards: [], qs: [] }).get(p);
+  for (const b of boards) group(b.project).boards.push(b);
+  for (const q of questions) group(q.project).qs.push(q);
+  return [...projects].map(([project, { boards: bs, qs }]) => (
     <div class="group">
       <span class="head" title={project}>{project}</span>
+      {qs.map((q) => {
+        const url = `/s/${encodeURIComponent(q.session)}`;
+        return (
+          <a class="item ask" href={url} aria-current={q.session === session ? 'page' : undefined} data-token={q.token}
+            title={`${q.task}\n${q.id}: ${q.question}`} onClick={(e) => {
+              if (e.button || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return; // a new tab or window: the browser's own
+              e.preventDefault();
+              go(url);
+            }}>
+            <span class="label">{q.id} · {q.task}</span>
+            <span class="badge" role="img" aria-label="question waiting">?</span>
+          </a>
+        );
+      })}
       {bs.map((b) => {
         const changed = seen[b.id] !== b.version;
         return (
-          <button class="item" aria-current={b.id === shown ? 'page' : undefined} data-id={b.id} title={`${project} / ${b.file}`} onClick={() => go(b.id)}>
+          <button class="item" aria-current={b.id === shown ? 'page' : undefined} data-id={b.id} title={`${project} / ${b.file}`} onClick={() => go(`/b/${b.id}`)}>
             <span class="label">{b.file}</span>
             {changed ? <span class="dot" role="img" aria-label="changed" /> : null}
           </button>

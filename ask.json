@@ -1,0 +1,359 @@
+{
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Decision id, e.g. D3."
+    },
+    "task": {
+      "type": "string",
+      "maxLength": 60,
+      "description": "The work this sitting serves, in 2 to 6 words, e.g. grill header redesign. Same on every question of the sitting. The page shows it beside the project, so parallel sessions stay apart."
+    },
+    "n": {
+      "type": "integer",
+      "description": "Position in the sitting. Omit with total when the total is unknown."
+    },
+    "total": {
+      "type": "integer"
+    },
+    "question": {
+      "type": "string",
+      "description": "The decision, in one plain sentence."
+    },
+    "say_ok": {
+      "type": "string",
+      "description": "What option A does, in one clause. Required unless hard_to_undo; omitted when it is."
+    },
+    "hard_to_undo": {
+      "type": "boolean",
+      "description": "Hard to undo, changes an interface or architecture, or trades off something the user said they care about."
+    },
+    "today": {
+      "type": "string",
+      "description": "What the code or plan does now, one or two short sentences."
+    },
+    "problem": {
+      "type": "string",
+      "description": "Why this is being asked, one or two short sentences."
+    },
+    "context": {
+      "type": "array",
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "description": "One block; `kind` picks its fields, and any block may have a `title`. text {text}: paragraphs, '- ' lists, `code`, **bold**. code {code, lang?}: an excerpt, shown monochrome. diff {diff}: unified diff. table {columns, rows}: strings, up to 8 columns and 30 rows; numbers right-align. stats {items: [{label, value, note?}]}: 1 to 4 numbers worth comparing. diagram {mermaid}: Mermaid source. image {path}: absolute path to a png, jpg, webp or svg file, e.g. a screenshot.",
+        "properties": {
+          "kind": {
+            "enum": [
+              "text",
+              "code",
+              "diff",
+              "table",
+              "stats",
+              "diagram",
+              "image"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "lang": {
+            "type": "string"
+          },
+          "diff": {
+            "type": "string"
+          },
+          "columns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                },
+                "note": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "label",
+                "value"
+              ]
+            }
+          },
+          "mermaid": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "description": "Up to 4 blocks the options rely on, shown above them: a worked example, a table of numbers, a diagram of today."
+    },
+    "options": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 4,
+      "description": "Recommended first. Same rows for every option, in a neutral frame; no cell restates another option's cell in reverse.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "description": "Named by what it does, without the option letter."
+          },
+          "get": {
+            "type": "string",
+            "description": "What gets simpler, safer or cheaper."
+          },
+          "cost": {
+            "type": "string",
+            "description": "What is lost, as a count or a named thing."
+          },
+          "undo": {
+            "type": "string",
+            "description": "The action that reverses it."
+          }
+        },
+        "required": [
+          "label",
+          "get",
+          "cost",
+          "undo"
+        ]
+      }
+    },
+    "rows": {
+      "type": "array",
+      "maxItems": 4,
+      "description": "Extra comparison rows shared by every option, after get, cost and undo. One cell per option, in option order. A row's cells are all strings (a measurement, a count), or all blocks of one kind (a screenshot or diagram of each option); at most 2 block rows.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "description": "The shared dimension, e.g. Latency."
+          },
+          "cells": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "description": "One block; `kind` picks its fields, and any block may have a `title`. text {text}: paragraphs, '- ' lists, `code`, **bold**. code {code, lang?}: an excerpt, shown monochrome. diff {diff}: unified diff. table {columns, rows}: strings, up to 8 columns and 30 rows; numbers right-align. stats {items: [{label, value, note?}]}: 1 to 4 numbers worth comparing. diagram {mermaid}: Mermaid source. image {path}: absolute path to a png, jpg, webp or svg file, e.g. a screenshot.",
+                  "properties": {
+                    "kind": {
+                      "enum": [
+                        "text",
+                        "code",
+                        "diff",
+                        "table",
+                        "stats",
+                        "diagram",
+                        "image"
+                      ]
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "text": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "lang": {
+                      "type": "string"
+                    },
+                    "diff": {
+                      "type": "string"
+                    },
+                    "columns": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "rows": {
+                      "type": "array",
+                      "items": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "label": {
+                            "type": "string"
+                          },
+                          "value": {
+                            "type": "string"
+                          },
+                          "note": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "label",
+                          "value"
+                        ]
+                      }
+                    },
+                    "mermaid": {
+                      "type": "string"
+                    },
+                    "path": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "required": [
+          "label",
+          "cells"
+        ]
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "file:line anchors with a note each. Shown collapsed."
+    },
+    "detail": {
+      "type": "array",
+      "maxItems": 6,
+      "items": {
+        "type": "object",
+        "description": "One block; `kind` picks its fields, and any block may have a `title`. text {text}: paragraphs, '- ' lists, `code`, **bold**. code {code, lang?}: an excerpt, shown monochrome. diff {diff}: unified diff. table {columns, rows}: strings, up to 8 columns and 30 rows; numbers right-align. stats {items: [{label, value, note?}]}: 1 to 4 numbers worth comparing. diagram {mermaid}: Mermaid source. image {path}: absolute path to a png, jpg, webp or svg file, e.g. a screenshot.",
+        "properties": {
+          "kind": {
+            "enum": [
+              "text",
+              "code",
+              "diff",
+              "table",
+              "stats",
+              "diagram",
+              "image"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "lang": {
+            "type": "string"
+          },
+          "diff": {
+            "type": "string"
+          },
+          "columns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                },
+                "note": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "label",
+                "value"
+              ]
+            }
+          },
+          "mermaid": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "description": "Up to 6 blocks for the reader who doubts something, shown collapsed."
+    }
+  },
+  "required": [
+    "id",
+    "task",
+    "question",
+    "hard_to_undo",
+    "today",
+    "problem",
+    "options"
+  ]
+}
