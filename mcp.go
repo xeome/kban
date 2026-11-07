@@ -22,11 +22,16 @@ var askSchema json.RawMessage
 
 const askDescription = "Put one grill-me decision to the user in the session's browser tab and wait for the answer. Returns JSON {id, kind, option, label, words}: kind is option, defer, text (an answer in the user's own words, no option picked) or ask (the user wants more before deciding: re-ask the same id with this tool; option and label, when set, are a lean, not a decision). Calls longer than 2 minutes move to a background task: end your turn, the answer arrives as a task notification."
 
-const hubDown = "kban hub not reachable: start it with `kban -d`, then ask again"
+var reportSchema = json.RawMessage(`{"type":"object","properties":{"text":{"type":"string","description":"The report, in Markdown. A mermaid fence draws as a diagram."}},"required":["text"]}`)
+
+const reportDescription = "Show a report to the user on this session's page in the kban hub, rendered as Markdown with ```mermaid fences drawn as diagrams. Returns the page's URL at once."
+
+const hubDown = "kban hub not reachable: start it with `kban -d`, then try again"
 
 // relay is one agent session's MCP server: newline-delimited JSON-RPC on
 // stdio. Each ask is one request to the hub, held until the question is
-// answered; the relay keeps no sitting of its own.
+// answered; the relay keeps no sitting of its own. A report is one request
+// the hub answers at once.
 type relay struct {
 	id, session, cwd, url string
 	out                   io.Writer
@@ -42,7 +47,7 @@ func mcp(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if fl.Parse(args) != nil {
 		return 1
 	}
-	r := &relay{id: token(), session: os.Getenv("CLAUDE_CODE_SESSION_ID"), url: fmt.Sprintf("http://127.0.0.1:%d/api/grill/ask", *port),
+	r := &relay{id: token(), session: os.Getenv("CLAUDE_CODE_SESSION_ID"), url: fmt.Sprintf("http://127.0.0.1:%d/api/grill/", *port),
 		out: stdout, calls: map[string]context.CancelFunc{}}
 	if r.session == "" {
 		r.session = r.id
@@ -81,14 +86,23 @@ func (r *relay) handle(line []byte, stderr io.Writer) {
 		reply(map[string]any{"protocolVersion": p.ProtocolVersion, "capabilities": map[string]any{"tools": map[string]any{}},
 			"serverInfo": map[string]any{"name": "grill", "version": "kban"}})
 	case "tools/list":
-		reply(map[string]any{"tools": []any{map[string]any{"name": "ask", "description": askDescription, "inputSchema": askSchema}}})
+		reply(map[string]any{"tools": []any{map[string]any{"name": "ask", "description": askDescription, "inputSchema": askSchema},
+			map[string]any{"name": "report", "description": reportDescription, "inputSchema": reportSchema}}})
 	case "tools/call":
 		var p struct {
 			Name      string
 			Arguments json.RawMessage
 		}
 		json.Unmarshal(msg.Params, &p)
-		if p.Name != "ask" {
+		body := map[string]any{"relay": r.id, "session": r.session, "cwd": r.cwd}
+		switch p.Name {
+		case "ask":
+			body["args"] = p.Arguments
+		case "report":
+			var a struct{ Text string }
+			json.Unmarshal(p.Arguments, &a)
+			body["text"] = a.Text
+		default:
 			r.result(msg.ID, "unknown tool "+p.Name, true)
 			return
 		}
@@ -96,7 +110,7 @@ func (r *relay) handle(line []byte, stderr io.Writer) {
 		r.mu.Lock()
 		r.calls[string(msg.ID)] = cancel
 		r.mu.Unlock()
-		go r.ask(ctx, msg.ID, p.Arguments)
+		go r.post(ctx, msg.ID, p.Name, body)
 	case "notifications/cancelled":
 		var p struct{ RequestID json.RawMessage }
 		json.Unmarshal(msg.Params, &p)
@@ -115,15 +129,15 @@ func (r *relay) handle(line []byte, stderr io.Writer) {
 }
 
 // A cancelled call gets no result.
-func (r *relay) ask(ctx context.Context, id, args json.RawMessage) {
+func (r *relay) post(ctx context.Context, id json.RawMessage, tool string, payload map[string]any) {
 	defer func() {
 		r.mu.Lock()
 		r.calls[string(id)]()
 		delete(r.calls, string(id))
 		r.mu.Unlock()
 	}()
-	body, _ := json.Marshal(map[string]any{"relay": r.id, "session": r.session, "cwd": r.cwd, "args": args})
-	req, _ := http.NewRequestWithContext(ctx, "POST", r.url, bytes.NewReader(body))
+	body, _ := json.Marshal(payload)
+	req, _ := http.NewRequestWithContext(ctx, "POST", r.url+tool, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	var text []byte

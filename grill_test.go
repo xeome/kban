@@ -93,12 +93,20 @@ type sittingView struct {
 
 type gview struct {
 	Open    []openLine
+	Reports []struct {
+		Session, Project string
+		Time             int64
+	}
 	Session struct {
 		Source    *gsource
 		Sitting   []sittingView
 		Questions []struct {
 			Token, Relay string
 			Question     json.RawMessage
+		}
+		Reports []struct {
+			Time int64
+			Text string
 		}
 	}
 }
@@ -504,19 +512,108 @@ func TestThePhoneAnswersOnTheTailnetButNeverAsks(t *testing.T) {
 	if code, _ := post(t, g.tail.URL+"/api/grill/ask", "application/json", ask); code != 404 {
 		t.Errorf("an ask on the tailnet listener: %d, want 404", code)
 	}
+	rep, _ := json.Marshal(map[string]any{"relay": "r", "session": "s", "cwd": g.dir, "text": "from the tailnet"})
+	if code, _ := post(t, g.tail.URL+"/api/grill/report", "application/json", rep); code != 404 {
+		t.Errorf("a report on the tailnet listener: %d, want 404", code)
+	}
+	if reps := g.view("s").Session.Reports; len(reps) != 0 {
+		t.Errorf("the tailnet's report landed: %+v", reps)
+	}
 }
 
 // A cross-site page can send a simple POST, with any of these types or none, without asking first.
-func TestAskTakesOnlyJSON(t *testing.T) {
+func TestAskAndReportTakeOnlyJSON(t *testing.T) {
 	g := startGrill(t)
-	ask, _ := json.Marshal(map[string]any{"relay": "r", "session": "s", "cwd": g.dir, "args": question()})
-	for _, ct := range []string{"", "text/plain", "application/x-www-form-urlencoded", "multipart/form-data; boundary=x"} {
-		if code, _ := post(t, g.ts.URL+"/api/grill/ask", ct, ask); code != http.StatusUnsupportedMediaType {
-			t.Errorf("an ask sent as %q: %d, want 415", ct, code)
+	body, _ := json.Marshal(map[string]any{"relay": "r", "session": "s", "cwd": g.dir, "args": question(), "text": "a report"})
+	for _, route := range []string{"ask", "report"} {
+		for _, ct := range []string{"", "text/plain", "application/x-www-form-urlencoded", "multipart/form-data; boundary=x"} {
+			if code, _ := post(t, g.ts.URL+"/api/grill/"+route, ct, body); code != http.StatusUnsupportedMediaType {
+				t.Errorf("%s sent as %q: %d, want 415", route, ct, code)
+			}
 		}
 	}
-	if open := g.view("s").Open; len(open) != 0 {
-		t.Errorf("a question opened: %+v", open)
+	if v := g.view("s"); len(v.Open) != 0 || len(v.Session.Reports) != 0 {
+		t.Errorf("a question opened or a report landed: %+v %+v", v.Open, v.Session.Reports)
+	}
+}
+
+func TestAReportReturnsAtOnceAndReachesItsSessionOnly(t *testing.T) {
+	board := newBoardFile(t, t.TempDir(), "TODO.json", "A")
+	g := startGrill(t, board)
+	events := listen(t, g.ts.URL+"/api/b/"+fileID(board)+"/events")
+	r := g.relay("s")
+	text := "## Done\n\n```mermaid\nflowchart LR\n  A --> B\n```"
+	start := time.Now()
+	url, isErr := r.tool(r.report(text))
+	if isErr || url != g.ts.URL+"/s/s" || time.Since(start) > 2*time.Second {
+		t.Fatalf("report: %q (error %v) after %s, want the page URL at once", url, isErr, time.Since(start))
+	}
+	page := g.view("s").Session
+	reps := page.Reports
+	if len(reps) != 1 || reps[0].Text != text || reps[0].Time == 0 {
+		t.Fatalf("the session's reports = %+v, want the text", reps)
+	}
+	if page.Source == nil || page.Source.Project != filepath.Base(g.dir) {
+		t.Errorf("a session that only reported: source %+v, want its project", page.Source)
+	}
+	for {
+		e := next(t, events)
+		var v gview
+		json.Unmarshal([]byte(e.data), &v)
+		if e.name != "grill" || len(v.Reports) == 0 {
+			continue
+		}
+		if strings.Contains(e.data, "flowchart") || len(v.Reports) != 1 || v.Reports[0].Session != "s" ||
+			v.Reports[0].Project != filepath.Base(g.dir) || v.Reports[0].Time != reps[0].Time {
+			t.Errorf("the board stream's grill event: %s, want session s, its project and time, and no text", e.data)
+		}
+		break
+	}
+
+	g.report("t", "from t")
+	if reps := g.view("t").Session.Reports; len(reps) != 1 || reps[0].Text != "from t" {
+		t.Errorf("session t's page: %+v, want its own report alone", reps)
+	}
+	if lines := g.view("s").Reports; len(lines) != 2 || lines[0].Session != "t" || lines[1].Session != "s" {
+		t.Errorf("reporting sessions = %+v, want t, then s", lines)
+	}
+	if msg, isErr := r.tool(r.report(strings.Repeat("x", reportText+1))); !isErr || !strings.Contains(msg, "64 KiB") {
+		t.Errorf("a report past 64 KiB: %.80q (error %v), want the tool error naming the cap", msg, isErr)
+	}
+	if reps := g.view("s").Session.Reports; len(reps) != 1 {
+		t.Errorf("the session's reports = %d, want the long one refused", len(reps))
+	}
+}
+
+func (g *grillHub) report(session, text string) {
+	g.t.Helper()
+	body, _ := json.Marshal(map[string]any{"relay": "r", "session": session, "cwd": g.dir, "text": text})
+	if code, out := post(g.t, g.ts.URL+"/api/grill/report", "application/json", body); code != 200 {
+		g.t.Fatalf("report %q: %d %s", text, code, out)
+	}
+}
+
+func TestTheHubKeepsTheNewest50Reports(t *testing.T) {
+	g := startGrill(t)
+	g.report("a", "r0")
+	for i := 1; i <= 50; i++ {
+		g.report("b", fmt.Sprint("r", i))
+	}
+	v := g.view("b")
+	reps := v.Session.Reports
+	if len(reps) != 50 {
+		t.Fatalf("%d reports, want 50", len(reps))
+	}
+	for i, rep := range reps {
+		if rep.Text != fmt.Sprint("r", 50-i) || i > 0 && rep.Time >= reps[i-1].Time {
+			t.Fatalf("reports[%d] = %+v after %+v, want r%d, newest first, each its own time", i, rep, reps[max(i-1, 0)], 50-i)
+		}
+	}
+	if len(v.Reports) != 1 || v.Reports[0].Session != "b" || v.Reports[0].Time != reps[0].Time {
+		t.Errorf("reporting sessions = %+v, want b alone at its newest time", v.Reports)
+	}
+	if a := g.view("a").Session.Reports; len(a) != 0 {
+		t.Errorf("session a kept %+v, the oldest report", a)
 	}
 }
 

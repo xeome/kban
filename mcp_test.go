@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http/httptest"
@@ -86,6 +87,10 @@ func (r *relayProc) ask(q map[string]any) int {
 	return r.call("tools/call", map[string]any{"name": "ask", "arguments": q})
 }
 
+func (r *relayProc) report(text string) int {
+	return r.call("tools/call", map[string]any{"name": "report", "arguments": map[string]any{"text": text}})
+}
+
 func (r *relayProc) cancel(id int) {
 	r.notify("notifications/cancelled", map[string]any{"requestId": id, "reason": "test"})
 }
@@ -138,15 +143,21 @@ func portOf(ts *httptest.Server) string {
 	return p
 }
 
-func TestRelayListsGrillsAskTool(t *testing.T) {
+func TestRelayListsAskAndReport(t *testing.T) {
 	r := startRelay(t, "1", "s", t.TempDir())
 	res := r.result(r.call("tools/list", map[string]any{}), 5*time.Second)
 	tools := res["result"].(map[string]any)["tools"].([]any)
-	tool := tools[0].(map[string]any)
-	props := tool["inputSchema"].(map[string]any)["properties"].(map[string]any)
-	if len(tools) != 1 || tool["name"] != "ask" {
-		t.Fatalf("tools = %v, want ask alone", tools)
+	names := []any{}
+	for _, tool := range tools {
+		names = append(names, tool.(map[string]any)["name"])
 	}
+	if fmt.Sprint(names) != "[ask report]" {
+		t.Fatalf("tools = %v, want ask and report", names)
+	}
+	if props, _ := tools[1].(map[string]any)["inputSchema"].(map[string]any)["properties"].(map[string]any); props["text"] == nil {
+		t.Errorf("report's schema = %v, want a text property", tools[1])
+	}
+	props := tools[0].(map[string]any)["inputSchema"].(map[string]any)["properties"].(map[string]any)
 	for _, f := range questionFields {
 		if props[f] == nil {
 			t.Errorf("the schema has no %s; the hub checks it", f)
@@ -168,6 +179,9 @@ func TestRelayWithoutAHub(t *testing.T) {
 	r := startRelay(t, port, "s", t.TempDir())
 	if text, isErr := r.tool(r.ask(question())); !isErr || text != hubDown {
 		t.Errorf("no hub: %q (error %v), want %q", text, isErr, hubDown)
+	}
+	if text, isErr := r.tool(r.report("done")); !isErr || text != hubDown {
+		t.Errorf("a report with no hub: %q (error %v), want %q", text, isErr, hubDown)
 	}
 }
 
