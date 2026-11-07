@@ -415,7 +415,7 @@ func (h *hub) ask(w http.ResponseWriter, r *http.Request) {
 	src.Task = q["task"].(string)
 	page := "/s/" + url.PathEscape(e.session)
 	if tail != "" { // before it is published, so an answer or cancel at once drops it
-		h.push.add(e.token, tail+page, fmt.Sprintf("%s\n%s: %s", src.Task, e.id, q["question"]))
+		h.push.add("", e.token, tail+page, fmt.Sprintf("%s\n%s: %s", src.Task, e.id, q["question"]))
 	}
 	h.mu.Lock()
 	s := h.sessions[e.session]
@@ -448,7 +448,7 @@ func (h *hub) ask(w http.ResponseWriter, r *http.Request) {
 			h.closeLocked(e, "cancelled")
 		}
 		h.mu.Unlock()
-		h.push.drop(e.token)
+		h.push.drop("", e.token)
 	}
 }
 
@@ -480,7 +480,7 @@ func (h *hub) answer(w http.ResponseWriter, r *http.Request) {
 	enc.Encode(res)
 	e.done <- bytes.TrimSpace(buf.Bytes())
 	h.closeLocked(e, "answered")
-	h.push.drop(e.token)
+	h.push.drop("", e.token)
 	writeStatus(w, 200, "message", "Sent.")
 }
 

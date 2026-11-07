@@ -35,7 +35,7 @@ function Card({ card, c, i }) {
   const dragging = S.drag?.kind === 'card' && S.drag.from.c === c && S.drag.from.i === i;
   const n = (card.comments || []).length;
   return (
-    <article class={'card' + (sel ? ' sel' : '') + (dragging ? ' dragging' : '')} draggable tabIndex={-1} data-i={i}
+    <article class={'card' + (sel ? ' sel' : '') + (dragging ? ' dragging' : '')} draggable tabIndex={-1} data-i={i} data-id={card.id}
       onClick={() => openCard(c, i)}>
       <div class="row"><span class="t">{card.title || 'Untitled'}</span><DeleteButton at={{ c, i }} /></div>
       {card.notes ? <Md class="b md" src={card.notes} face /> : null}

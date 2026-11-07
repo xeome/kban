@@ -62,9 +62,9 @@ type grillHub struct {
 	opened   []string
 }
 
-func startGrill(t *testing.T) *grillHub {
+func startGrill(t *testing.T, paths ...string) *grillHub {
 	t.Helper()
-	h, ts := startHub(t)
+	h, ts := startHub(t, paths...)
 	t.Cleanup(ts.CloseClientConnections) // before Close, which waits for held asks
 	g := &grillHub{t: t, h: h, ts: ts, dir: t.TempDir()}
 	h.ackWait = ackWait
