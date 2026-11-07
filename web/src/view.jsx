@@ -1,7 +1,7 @@
 import { useRef } from 'preact/hooks';
 import { md } from './md.js';
 import {
-  S, addCard, addColumn, addNew, addingColumn, closeCard, colKey, deleteComment, deleteOpenCard, discardNew, draftInput, editKeys, find, leaveEdit, moveOpenCard, newNotesInput, newTitleInput, notesBlur, notesFocus,
+  S, addCard, addColumn, addNew, addingColumn, closeCard, colKey, deleteComment, deleteOpenCard, discardNew, draftInput, editKeys, find, go, leaveEdit, moveOpenCard, newNotesInput, newTitleInput, notesBlur, notesFocus,
   notesInput, openCard, post, remove, startEdit, step, titleBlur, titleFocus, when,
 } from './store.js';
 
@@ -178,4 +178,22 @@ export function CardBody() {
       </div>
     </>
   );
+}
+
+export function Sidebar({ boards, seen, shown }) {
+  const projects = Map.groupBy(boards, (b) => b.project);
+  return [...projects].map(([project, bs]) => (
+    <div class="group">
+      <span class="head" title={project}>{project}</span>
+      {bs.map((b) => {
+        const changed = seen[b.id] !== b.version;
+        return (
+          <button class="item" aria-current={b.id === shown ? 'page' : undefined} data-id={b.id} title={`${project} / ${b.file}`} onClick={() => go(b.id)}>
+            <span class="label">{b.file}</span>
+            {changed ? <span class="dot" role="img" aria-label="changed" /> : null}
+          </button>
+        );
+      })}
+    </div>
+  ));
 }

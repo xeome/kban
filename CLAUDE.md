@@ -8,7 +8,7 @@ person and the agents working alongside them.
 ## Commands
 
     go test ./...          # everything; ~1s, no bun needed
-    go run . board.json    # serve a board (-p port, -no-open)
+    go run . board.json    # register a board and open it on the hub (-p port, -no-open, -d)
     go run . show -f board.json   # the agent commands: show, add, move, set, comment, init
 
     cd web && bun install --frozen-lockfile  # once, for UI work
@@ -20,10 +20,11 @@ person and the agents working alongside them.
 ## Layout
 
     board.go    Parse / Write / Merge — the format and the conflict rules
+    hub.go      the registry (~/.config/kban/boards) and the 500ms poll
     server.go   HTTP + SSE, file read/write, the 409 on an unreadable file
     file.go     update: the one way the file is written; create: a new one
     cli.go      the agent commands
-    main.go     flags, port picking, browser opening
+    main.go     flags, serving or joining the hub on the port, browser opening
     ui/         embedded (go:embed) and served as is; app.js is built, never edited
     web/src/    the UI source: store.js (state, saving, keys, drag), view.jsx
                 (Preact components), md.js (Markdown for notes and comments)
@@ -31,7 +32,7 @@ person and the agents working alongside them.
 ## Rules that break things when ignored
 
 - **The file is the database, and kban is its only writer.** No sidecar
-  state. Every card has an id kban made (`newID`), unique in the file; the
+  state. The registry is the hub's list of boards, never board state. Every card has an id kban made (`newID`), unique in the file; the
   browser draws its ids from `POST /api/ids`, agents use the commands. A
   column is identified by its title, repeats numbered by position.
 - **The format is strict, and an unreadable file is never written.** `Parse`
@@ -43,13 +44,14 @@ person and the agents working alongside them.
   case-insensitively.
 - **`Parse` and `Write` must round-trip.** `Write(Parse(s)) == s` for any file
   kban itself produced.
-- **The browser never merges.** It sends `{fileID, base, board}`; the server
-  merges against disk and returns the file it wrote. Keep it that way — two
-  merge implementations will disagree. Undo is the same request with the
-  step's `{after, before}`. `fileID` names the file the tab loaded: the
-  server refuses another (412), and a tab reloads when its port serves
-  another file, since another kban on the port would otherwise get this
-  board's undo steps. A modal field's step is built when the field is left:
+- **The browser never merges.** It sends `{base, board}` to its board's
+  `/api/b/{id}/board`; the server merges against disk and returns the file
+  it wrote. Keep it that way — two merge implementations will disagree. Undo
+  is the same request with the step's `{after, before}`. One hub serves
+  every board in its registry; `{id}` is the board's `fileID`, so a tab's
+  saves and undo steps reach only the file it loaded, and an id not in the
+  registry is 404. A Host other than 127.0.0.1, localhost or the tailnet
+  address, with the port, is 403. A modal field's step is built when the field is left:
   before is the board then with only that field set back, so undo never
   reverts what an agent wrote while you typed.
 - **The server stores what it merged, unaltered.** The JSON encoder is the
@@ -61,7 +63,9 @@ person and the agents working alongside them.
   landing at once both keep their change, and a reader never sees half a
   board.
 - Changes to the file are picked up by polling, within 500ms, and pushed
-  over `/api/events`. The page reopens that stream itself after any error
+  over `/api/b/{id}/events`, with the board list as a named `boards` event.
+  The sidebar is painted only by that event and when the tab shows again,
+  never by render(). The page reopens that stream itself after any error
   and loads the board on every open, because Firefox gives up on a silent
   stream after a network change.
 - **Render never touches a focused field.** The modal follows its card by
@@ -90,7 +94,8 @@ fails before it passes: break the line it covers, run it, put the line back.
 `web/e2e/check.mjs` drives the real binary in headless Chromium: opening,
 stepping, comments landing while you type, undo, the broken-file banner,
 the stream reopening after the browser gives up on it or the board fails
-to load, a save that never landed, another kban taking the port, the notes
+to load, a save that never landed, the hub's sidebar (a second kban joining,
+the change dot, a rename that lands before the switch), the notes
 swap, Markdown, and one drag across columns. It covers no drag
 within a column and no column drag: after touching the UI, do those by
 hand, then `cat` the file and confirm it says what the screen says.

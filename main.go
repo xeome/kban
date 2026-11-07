@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -11,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -41,58 +44,133 @@ func starter(name string) Board {
 	}
 }
 
+// childEnv marks the detached kban that -d starts. It only suppresses the
+// default file, since its parent already registered the one named.
+const childEnv = "KBAN_DETACHED"
+
 func main() {
 	if len(os.Args) > 1 && commands[os.Args[1]] != "" {
 		os.Exit(cli(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 	}
-	port := flag.Int("p", 4177, "port to listen on (tries the next few if taken)")
+	port := flag.Int("p", 4177, "port to listen on")
 	noOpen := flag.Bool("no-open", false, "do not open a browser")
+	detached := flag.Bool("d", false, "run the hub in the background; with no file, start it alone")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: kban [flags] [board.json]\n       kban show|add|move|set|comment|init [-f board.json] ...\n\nA board is a JSON file of columns and cards. Default file: TODO.json\n\n")
+		fmt.Fprintf(os.Stderr, "usage: kban [flags] [board.json]\n       kban show|add|move|set|comment|init [-f board.json] ...\n\n"+
+			"A board is a JSON file of columns and cards. Default file: TODO.json\n"+
+			"One kban serves every board listed in ~/.config/kban/boards; kban board.json adds it there.\n\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
-	path := "TODO.json"
-	if flag.NArg() > 0 {
-		path = flag.Arg(0)
+	path := flag.Arg(0)
+	if path == "" && !*detached && os.Getenv(childEnv) == "" {
+		path = "TODO.json"
 	}
-	if err := run(path, *port, !*noOpen); err != nil {
+	if err := run(path, *port, !*noOpen, *detached); err != nil {
 		fmt.Fprintln(os.Stderr, "kban:", err)
 		os.Exit(1)
 	}
 }
 
-func run(path string, port int, browse bool) error {
-	path, err := filepath.Abs(path)
+func run(path string, port int, browse, detached bool) error {
+	registry, err := registryPath()
 	if err != nil {
 		return err
 	}
-	if err := create(path, starter(filepath.Base(path))); err != nil && !errors.Is(err, fs.ErrExist) {
-		return err
-	}
-	ln, port, err := listen(port)
-	if err != nil {
-		return err
-	}
-	url := fmt.Sprintf("http://127.0.0.1:%d", port)
-	fmt.Printf("%s\n%s\n", path, url)
-	if browse {
-		openBrowser(url)
-	}
-	s := newServer(path)
-	go s.watch()
-	return http.Serve(ln, s.handler())
-}
-
-func listen(port int) (net.Listener, int, error) {
-	var err error
-	for p := port; p < port+10; p++ {
-		var ln net.Listener
-		if ln, err = net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", p)); err == nil {
-			return ln, p, nil
+	if path != "" {
+		if path, err = filepath.Abs(path); err != nil {
+			return err
+		}
+		if err := create(path, starter(filepath.Base(path))); err != nil && !errors.Is(err, fs.ErrExist) {
+			return err
+		}
+		if err := register(registry, path); err != nil {
+			return err
 		}
 	}
-	return nil, 0, err
+	ln, url, err := claim(port, path)
+	if err != nil {
+		return err
+	}
+	fmt.Println(url)
+	if ln != nil && detached {
+		ln.Close()
+		pid, err := detach(port)
+		if err != nil {
+			return err
+		}
+		fmt.Println("kban runs in the background, pid", pid)
+		ln = nil
+	}
+	if browse && path != "" {
+		openBrowser(url)
+	}
+	if ln == nil { // a hub serves this port: one already running, or the one just detached
+		return nil
+	}
+	return serve(ln, registry)
+}
+
+func claim(port int, path string) (net.Listener, string, error) {
+	base := fmt.Sprintf("http://127.0.0.1:%d", port)
+	url := base + "/"
+	if path != "" {
+		url = base + "/b/" + fileID(path)
+	}
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err == nil {
+		return ln, url, nil
+	}
+	if hubAt(base) {
+		return nil, url, nil
+	}
+	return nil, "", fmt.Errorf("port %d is taken by something other than a kban hub", port)
+}
+
+func hubAt(base string) bool {
+	c := http.Client{Timeout: 2 * time.Second}
+	r, err := c.Get(base + "/api/boards")
+	if err != nil {
+		return false
+	}
+	defer r.Body.Close()
+	var list []json.RawMessage
+	return r.StatusCode == 200 && json.NewDecoder(r.Body).Decode(&list) == nil
+}
+
+func detach(port int) (int, error) {
+	p, err := startDetached(port)
+	if err != nil {
+		return 0, err
+	}
+	base := fmt.Sprintf("http://127.0.0.1:%d", port)
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		if hubAt(base) {
+			return p.Pid, nil
+		}
+	}
+	return 0, fmt.Errorf("the background kban (pid %d) did not answer on port %d within 2s", p.Pid, port)
+}
+
+func serve(ln net.Listener, registry string) error {
+	h := newHub(registry, currentUser())
+	go h.watch()
+	handler := h.handler()
+	// The tailnet address too, so the boards open from the owner's other
+	// devices. Never 0.0.0.0.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, _ := exec.CommandContext(ctx, "tailscale", "ip", "-4").Output()
+	first, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
+	if ip := net.ParseIP(first); ip.To4() != nil {
+		_, port, _ := net.SplitHostPort(ln.Addr().String())
+		if tln, err := net.Listen("tcp", net.JoinHostPort(ip.String(), port)); err != nil {
+			fmt.Fprintln(os.Stderr, "kban: not on the tailnet:", err)
+		} else {
+			go http.Serve(tln, handler)
+		}
+	}
+	return http.Serve(ln, handler)
 }
 
 func openBrowser(url string) {

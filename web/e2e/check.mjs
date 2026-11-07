@@ -1,6 +1,8 @@
 // Drives the real kban binary and the real UI in headless Chromium over CDP.
+// Each step runs its own hub on its own port. All read one registry, so each
+// hub lists every board registered so far.
 // usage: bun web/e2e/check.mjs <kban binary> [only-step]
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
@@ -19,12 +21,21 @@ const check = (name, ok, detail = '') => {
 const procs = [];
 process.on('exit', () => procs.forEach((p) => p.kill('SIGKILL')));
 
+const env = { ...process.env, XDG_CONFIG_HOME: dir };
 async function server(file, port) {
-  const p = spawn(bin, ['-no-open', '-p', String(port), file], { stdio: ['ignore', 'pipe', 'inherit'] });
+  const p = spawn(bin, ['-no-open', '-p', String(port), file], { stdio: ['ignore', 'pipe', 'inherit'], env });
   procs.push(p);
-  await new Promise((r) => p.stdout.once('data', r));
-  return `http://127.0.0.1:${port}`;
+  let out = '';
+  return new Promise((r) => p.stdout.on('data', (d) => { out += d; const url = out.match(/^http\S+$/m); if (url) r(url[0]); }));
 }
+// kban FILE with a hub already on port: it registers FILE and exits.
+function join(file, port) {
+  const k = spawnSync(bin, ['-no-open', '-p', String(port), file], { env, encoding: 'utf8' });
+  return { ok: k.status === 0, url: k.stdout.trim().split('\n').at(-1), id: k.stdout.trim().split('/').at(-1) };
+}
+const kban = (...args) => spawnSync(bin, args, { encoding: 'utf8' }).status === 0;
+const entry = (id) => `#side .item[data-id="${id}"]`;
+const dot = (id) => `!!document.querySelector('${entry(id)} .dot')`;
 
 const chrome = spawn('chromium', ['--headless=new', '--remote-debugging-port=9339', `--user-data-dir=${dir}/profile`,
   '--window-size=1440,900', '--no-first-run', '--disable-gpu', 'about:blank'], { stdio: 'ignore' });
@@ -337,6 +348,13 @@ if (run('broken')) {
   const p = await tab(url);
   await p.until(`!document.querySelector('#problem').hidden`);
   check('the board shows the error with its line', await p.ev(`document.querySelector('#problem').textContent.includes('line 3') && document.querySelector('#problem').textContent.includes('colour')`));
+  const beside = path.join(dir, 'beside-broken.json');
+  fs.writeFileSync(beside, JSON.stringify(board(['x']), null, 2));
+  const b = join(beside, 4306);
+  await p.until(`!!document.querySelector('${entry(b.id)}')`);
+  kban('add', '-f', beside, 'Todo', 'y');
+  check('the banner stays after another board changes',
+    b.ok && await p.until(dot(b.id)) >= 0 && await p.ev(`!document.querySelector('#problem').hidden && document.querySelector('#problem').textContent.includes('line 3')`));
   await p.ev(`window.__puts = 0; window.__log = []; const f0 = window.fetch; window.fetch = (u, o) => { if (o?.method === 'PUT') { window.__puts++; window.__log.push([Date.now(), o.body.slice(0, 400)]); } return f0(u, o); }`);
   await p.key('+');
   await p.type('New column');
@@ -363,7 +381,7 @@ if (run('reopen')) {
   k.kill('SIGKILL');
   await new Promise((r) => k.once('exit', r));
   let asked = 0;
-  const standIn = http.createServer((req, res) => { if (req.url === '/api/events') asked++; res.writeHead(503, { Connection: 'close' }).end(); });
+  const standIn = http.createServer((req, res) => { if (req.url.endsWith('/events')) asked++; res.writeHead(503, { Connection: 'close' }).end(); });
   await new Promise((r) => standIn.listen(4314, '127.0.0.1', r));
   for (let i = 0; i < 100 && !asked; i++) await sleep(100);
   await sleep(500);
@@ -387,7 +405,7 @@ if (run('loadfail')) {
     if (asked++) p.send('Fetch.continueRequest', { requestId });
     else p.send('Fetch.failRequest', { requestId, errorReason: 'ConnectionRefused' });
   });
-  await p.send('Fetch.enable', { patterns: [{ urlPattern: '*/api/board' }] });
+  await p.send('Fetch.enable', { patterns: [{ urlPattern: '*/board' }] });
   await p.send('Page.reload');
   check('a board whose first load failed still shows',
     await p.until(`document.querySelectorAll('.card').length === 1`, 5000) >= 0 && asked > 1, `${asked} board requests`);
@@ -403,7 +421,7 @@ if (run('loadlost')) {
     if (held === null) held = m.params.requestId;
     else p.send('Fetch.continueRequest', { requestId: m.params.requestId });
   });
-  await p.send('Fetch.enable', { patterns: [{ urlPattern: '*/api/board' }] });
+  await p.send('Fetch.enable', { patterns: [{ urlPattern: '*/board' }] });
   await p.send('Page.reload');
   for (let i = 0; i < 50 && held === null; i++) await sleep(100);
   k.kill('SIGKILL');
@@ -429,7 +447,7 @@ if (run('unsaved')) {
     if (request.method === 'PUT') p.send('Fetch.failRequest', { requestId, errorReason: 'ConnectionRefused' });
     else p.send('Fetch.continueRequest', { requestId });
   });
-  await p.send('Fetch.enable', { patterns: [{ urlPattern: '*/api/board' }] });
+  await p.send('Fetch.enable', { patterns: [{ urlPattern: '*/board' }] });
   // Every status shown, so a "saved" between two failed saves is caught.
   await p.ev(`window.__said = []; new MutationObserver(() => __said.push(document.querySelector('#status').textContent)).observe(document.querySelector('#status'), { childList: true, characterData: true, subtree: true }); 0`);
   await p.ev(`document.querySelectorAll('.card .x')[0].click()`);
@@ -444,25 +462,45 @@ if (run('unsaved')) {
     reopened && !said.includes('saved') && !!card(read(f), 'A'), JSON.stringify(said));
 }
 
-// --- another kban takes the port: the tab reloads onto its board -------------
-// Its undo steps and unsaved edits are for the board it showed before.
-if (run('port')) {
-  const { f, p, k } = await fresh(4318, ['A1', 'A2']);
+// --- one hub serves every board; the sidebar marks the changed ones ----------
+if (run('hub')) {
+  const { f, p } = await fresh(4318, ['A1']);
   const other = path.join(dir, 'other.json');
-  const was = JSON.stringify(board(['B1']), null, 2);
-  fs.writeFileSync(other, was);
-  await p.ev(`document.querySelectorAll('.card .x')[0].click()`);
-  const undoable = await saved(p) >= 0 && !card(read(f), 'A1'); // else u has nothing to undo
-  await p.ev(`window.__before = true`);
-  k.kill('SIGKILL');
-  await new Promise((r) => k.once('exit', r));
-  await server(other, 4318);
-  const shown = await p.until(`[...document.querySelectorAll('.card .t')].map((e) => e.textContent).join() === 'B1'`, 8000) >= 0;
-  const reloaded = await p.ev(`!window.__before`);
-  await p.key('u');
-  await sleep(1000);
-  check('after another kban took the port, the tab reloads and its undo leaves that board alone',
-    undoable && shown && reloaded && fs.readFileSync(other, 'utf8') === was, `undoable=${undoable} shown=${shown} reloaded=${reloaded} other=${JSON.stringify(read(other).columns[0].cards.map((c) => c.title))}`);
+  fs.writeFileSync(other, JSON.stringify(board(['B1']), null, 2));
+  const b = join(other, 4318);
+  const idA = (await p.ev('location.pathname')).split('/')[2];
+  check('a second kban on the port joins the hub, and both boards are listed, unmarked',
+    b.ok && b.url.endsWith(`/b/${b.id}`) && await p.until(`!!document.querySelector('${entry(idA)}') && !!document.querySelector('${entry(b.id)}')`) >= 0
+      && !await p.ev(`${dot(idA)} || ${dot(b.id)}`), JSON.stringify(b));
+  const added = kban('add', '-f', f, 'Todo', 'agent on A') && kban('add', '-f', other, 'Todo', 'agent on B');
+  const marked = added && await p.until(`${dot(b.id)} && [...document.querySelectorAll('.card .t')].some((e) => e.textContent === 'agent on A')`) >= 0;
+  check('an agent changes both: the other board gets a dot, the shown one shows the change and no dot',
+    marked && !await p.ev(dot(idA)), `marked=${marked} dotA=${await p.ev(dot(idA))}`);
+  // The rename's save is held, so a tab that left without waiting for it is gone by then.
+  let held = null;
+  p.on((m) => {
+    if (m.method !== 'Fetch.requestPaused') return;
+    if (m.params.request.method === 'PUT' && held === null) held = m.params.requestId;
+    else p.send('Fetch.continueRequest', { requestId: m.params.requestId });
+  });
+  await p.send('Fetch.enable', { patterns: [{ urlPattern: '*/board' }] });
+  await p.click('.col[data-c="0"] .col-head .t');
+  await p.type('Renamed');
+  await p.click(entry(b.id)); // within 100ms of the last keystroke
+  for (let i = 0; i < 50 && held === null; i++) await sleep(20);
+  await sleep(500);
+  const waited = held !== null && await p.ev('location.pathname') === `/b/${idA}`;
+  if (held !== null) await p.send('Fetch.continueRequest', { requestId: held });
+  const moved = await p.until(`location.pathname === '/b/${b.id}' && [...document.querySelectorAll('.card .t')].some((e) => e.textContent === 'B1')`, 5000) >= 0;
+  await p.send('Fetch.disable');
+  check('a column rename followed at once by a sidebar click stays until its save lands, then the file has it and the tab shows the board clicked',
+    waited && moved && read(f).columns[0].title === 'Renamed', `held=${held !== null} waited=${waited} moved=${moved} ${JSON.stringify(read(f).columns.map((c) => c.title))}`);
+  await p.until(`!!document.querySelector('${entry(idA)}')`);
+  await sleep(1100); // past two polls, so the list names A's version after the rename
+  check('the board left right after its own save has no dot', !await p.ev(dot(idA)));
+  check('the board clicked has lost its dot, and the header names its project and file',
+    await p.until(`!!document.querySelector('${entry(b.id)}') && !${dot(b.id)}`) >= 0 && await p.ev(`document.querySelector('#file').textContent`) === `${path.basename(dir)} / other.json`,
+    await p.ev(`document.querySelector('#file').textContent + ' dot=' + ${dot(b.id)}`));
 }
 
 // --- Markdown in notes and comments, driven by mouse and keys ------------------

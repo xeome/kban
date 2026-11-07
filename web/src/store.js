@@ -1,9 +1,12 @@
 import { h, render as paint } from 'preact';
-import { Board, CardBody } from './view.jsx';
+import { Board, CardBody, Sidebar } from './view.jsx';
 
 const $ = (s) => document.querySelector(s);
 const clone = (v) => JSON.parse(JSON.stringify(v));
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+const ID = location.pathname.split('/')[2] || '';
+const API = `/api/b/${ID}`;
 
 // base is the board the server last acknowledged; local edits are relative
 // to it. The server merges {base, board} against the file, so this client
@@ -13,7 +16,6 @@ export const S = {
   base: null,             // null until the first board: an edit saved against no base replaces every column
   user: '',               // author of comments posted here
   file: '',
-  fileID: '',             // the file this tab shows; every save names it
   sel: { c: 0, i: -1 },   // i === -1 selects the column header
   edit: null,             // { c } while a column title is edited
   editSnap: null,
@@ -31,15 +33,10 @@ export const S = {
 
 // --- server ----------------------------------------------------------------
 
-function loaded({ file, fileID, user, board, error }) {
-  // Another kban took this port. This tab's undo steps and unsaved edits are
-  // for the board it showed, so it starts over on the one served now.
-  if (S.fileID && fileID !== S.fileID) return location.reload();
-  S.fileID = fileID;
+function loaded({ file, project, user, board, error }) {
   S.file = file;
   S.user = user;
-  $('#file').textContent = file;
-  document.title = file;
+  $('#file').textContent = document.title = `${project} / ${file}`;
   receive({ board, error });
   if (!S.dirty && !S.inflight) status('saved'); // else the save still owed says how it went
   refill();
@@ -77,29 +74,35 @@ function schedule() {
 }
 
 async function send(base, board) {
-  const r = await fetch('/api/board', { method: 'PUT', body: JSON.stringify({ fileID: S.fileID, base, board }) });
+  const r = await fetch(`${API}/board`, { method: 'PUT', body: JSON.stringify({ base, board }) });
   if (r.status === 409) throw Object.assign(new Error(await r.text()), { unreadable: true });
   if (!r.ok) throw new Error(await r.text());
+  // This tab's own write is no news to it: no dot on this board once it leaves.
+  const version = r.headers.get('X-Kban-Version');
+  see((seen) => { seen[ID] = version; });
   return r.json();
 }
 
-async function save() {
-  if (S.inflight) return;
-  S.inflight = true;
+// One request at a time: S.inflight is the one out, resolving to whether it
+// landed. fail undoes what the attempt assumed.
+function attempt(base, board, fail) {
+  status('saving');
+  return S.inflight = send(base, board).then(
+    (merged) => { settle(merged); return true; },
+    (e) => { S.inflight = false; fail(); failed(e); return false; });
+}
+
+function save() {
+  if (S.inflight) return S.inflight;
   S.dirty = false;
   const prevBase = S.base;
   const board = clone(S.board);
   S.base = board;
-  status('saving');
-  try {
-    settle(await send(prevBase, board));
-  } catch (e) {
-    S.inflight = false;
+  return attempt(prevBase, board, () => {
     S.base = prevBase;
     S.dirty = true;
-    failed(e);
     S.timer = setTimeout(save, 2000);
-  }
+  });
 }
 
 function settle(merged) {
@@ -118,14 +121,22 @@ function failed(e) {
 // A browser may give up on the stream for good: Firefox does when it drops
 // a silent one after a network change. So the page reconnects itself.
 export function listen() {
-  const es = new EventSource('/api/events');
-  const lost = () => { status('offline'); es.close(); setTimeout(listen, 2000); };
+  const es = new EventSource(`${API}/events`);
+  const lost = () => {
+    status('offline');
+    es.close();
+    setTimeout(listen, 2000);
+    // Reconnecting never brings back a board the hub no longer lists.
+    fetch(`${API}/board`).then((r) => r.status === 404 && problem('unlisted',
+      `${S.file} is not in the hub's list of boards (~/.config/kban/boards). Run kban <file> to add it back.`), () => {});
+  };
   es.onmessage = (e) => receive(JSON.parse(e.data));
+  es.addEventListener('boards', (e) => { boards = JSON.parse(e.data); side(); });
   // The board loads on every open, so one that fails to arrive is a lost
   // stream too, unless onerror already reopens it. An error while showing
   // it is a bug, not a lost stream, so it stays uncaught.
   es.onopen = () => {
-    fetch('/api/board').then((r) => r.json()).then(loaded, () => es.readyState === EventSource.OPEN && lost());
+    fetch(`${API}/board`).then((r) => r.json()).then(loaded, () => es.readyState === EventSource.OPEN && lost());
   };
   es.onerror = lost;
 }
@@ -136,10 +147,43 @@ function status(state, text) {
   el.textContent = text || { saving: 'saving…', saved: 'saved', offline: 'offline' }[state];
 }
 
-function problem(error) {
+function problem(error, text = `${S.file} can't be read: ${error}. Your changes are kept and will save once it reads again.`) {
   const el = $('#problem');
   el.hidden = !error;
-  el.textContent = error ? `${S.file} can't be read: ${error}. Your changes are kept and will save once it reads again.` : '';
+  el.textContent = error ? text : '';
+}
+
+// --- the boards sidebar ----------------------------------------------------
+
+// Painted only here, on the server's boards event and when the tab shows
+// again, never by render(), which selects inputs and scrolls.
+let boards = [];
+function side() {
+  const seen = see((seen) => {
+    for (const b of boards) {
+      if (!(b.id in seen) || (b.id === ID && document.visibilityState === 'visible')) seen[b.id] = b.version;
+    }
+  });
+  paint(h(Sidebar, { boards, seen, shown: ID }), $('#side'));
+}
+
+// see changes the version of each board this browser last showed, shared by
+// its tabs, and returns them.
+function see(edit) {
+  let seen = {};
+  try { seen = JSON.parse(localStorage.seen || '{}'); } catch {}
+  edit(seen);
+  try { localStorage.seen = JSON.stringify(seen); } catch {}
+  return seen;
+}
+document.addEventListener('visibilitychange', side);
+
+// The first attempt that fails ends the wait, and its edit is dropped, as a reload drops it.
+export async function go(id) {
+  if (id === ID) return;
+  clearTimeout(S.timer);
+  while ((S.inflight || S.dirty) && await save());
+  location.assign(`/b/${id}`);
 }
 
 // --- theme ---------------------------------------------------------------
@@ -218,7 +262,7 @@ function undo() {
   if (step) undoBoard(step);
 }
 
-async function undoBoard(step) {
+function undoBoard(step) {
   if (S.dirty || S.inflight) {
     // ponytail: poll until the pending save lands (it is already scheduled,
     // with its own backoff); a queue if undo grows more callers
@@ -226,15 +270,7 @@ async function undoBoard(step) {
     else S.undo.push(step); // the file is unreadable: keep the step for later
     return;
   }
-  S.inflight = true;
-  status('saving');
-  try {
-    settle(await send(step.after, step.before));
-  } catch (e) {
-    S.inflight = false;
-    S.undo.push(step);
-    failed(e);
-  }
+  attempt(step.after, step.before, () => S.undo.push(step));
 }
 
 function clampSel() {
