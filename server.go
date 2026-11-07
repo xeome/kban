@@ -84,6 +84,7 @@ func (h *hub) mux(local bool) http.Handler {
 	mux.HandleFunc("GET /api/s/{session}/events", h.sessionEvents)
 	mux.HandleFunc("POST /api/q/{token}/answer", h.answer)
 	mux.HandleFunc("GET /api/q/{token}/file/{path}", h.image)
+	mux.HandleFunc("POST /api/seen", func(w http.ResponseWriter, r *http.Request) { h.seen(w, r, local) })
 	ask, ack := h.ask, h.ack
 	if !local {
 		ask, ack = http.NotFound, http.NotFound
@@ -224,6 +225,24 @@ func (bf *served) state() state {
 		return state{Error: err.Error()}
 	}
 	return state{Board: &b}
+}
+
+// seen is a tab saying what it shows the owner, so no push repeats it.
+func (h *hub) seen(w http.ResponseWriter, r *http.Request, local bool) {
+	if !jsonOnly(r) { // as ask: a cross-site page cannot send JSON without asking first
+		http.Error(w, "Content-Type: application/json", http.StatusUnsupportedMediaType)
+		return
+	}
+	var req struct {
+		Board         string
+		Cards, Tokens []string
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	h.push.seen(req.Board, req.Cards, req.Tokens, local)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // newIDs hands the browser ids for the cards it creates, so kban is the
