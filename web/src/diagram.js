@@ -1,5 +1,5 @@
-// Mermaid diagrams for grill questions. ui/mermaid.js is large, so it is
-// loaded by a script tag on the first diagram, not bundled into app.js.
+// ui/mermaid.js is large, so it is loaded by a script tag on the first
+// diagram, not bundled into app.js.
 
 let loading = null;
 function load() {

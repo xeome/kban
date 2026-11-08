@@ -137,7 +137,7 @@ export function listen() {
   };
   es.onmessage = (e) => receive(JSON.parse(e.data));
   es.addEventListener('boards', (e) => { boards = JSON.parse(e.data); side(); });
-  es.addEventListener('grill', (e) => {
+  es.addEventListener('sessions', (e) => {
     const ev = JSON.parse(e.data);
     questions = ev.open;
     reports = ev.reports;
@@ -169,7 +169,7 @@ function problem(error, text = `${S.file} can't be read: ${error}. Your changes 
 
 // --- the boards sidebar ----------------------------------------------------
 
-// Painted only here, on the server's boards and grill events and when the
+// Painted only here, on the server's boards and sessions events and when the
 // tab shows again, never by render(), which selects inputs and scrolls.
 let boards = [];
 let questions = [];

@@ -148,7 +148,7 @@ func TestHubServesEachBoardByID(t *testing.T) {
 	}
 
 	e := next(t, events)
-	for e.name == "grill" { // sent on open too
+	for e.name == "sessions" { // sent on open too
 		e = next(t, events)
 	}
 	var l []listed

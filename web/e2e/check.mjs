@@ -133,7 +133,8 @@ async function streams(p) {
   await p.send('Page.addScriptToEvaluateOnNewDocument', { source: 'window.__es = []; window.EventSource = class extends EventSource { constructor(u) { super(u); __es.push(this); } };' });
   return () => p.ev(`__es.filter((e) => e.readyState !== EventSource.CLOSED).length`);
 }
-const run = (name) => !only || only === name;
+let ran = false;
+const run = (name) => !only || (only === name && (ran = true));
 const pages = async () => (await (await fetch('http://127.0.0.1:9339/json/list')).json()).filter((t) => t.type === 'page').length;
 const shown = (sel) => `!!document.querySelector(${JSON.stringify(sel)})?.checkVisibility({ opacityProperty: true })`;
 const notesView = '#card label[for=card-notes]';
@@ -642,7 +643,7 @@ if (run('drag')) {
     await p.ev(`document.activeElement.id + ' held=' + !!document.querySelector('.notes.held')`));
 }
 
-// --- grill: an agent session's question, answered in the hub -------------------
+// --- ask: an agent session's question, answered in the hub ---------------------
 function relay(port, session) {
   const p = spawn(bin, ['mcp', '-p', String(port)], { env: { ...env, CLAUDE_CODE_SESSION_ID: session }, cwd: dir, stdio: ['pipe', 'pipe', 'inherit'] });
   procs.push(p);
@@ -669,7 +670,7 @@ function relay(port, session) {
     stop: () => new Promise((r) => { p.once('exit', r); p.stdin.end(); }),
   };
 }
-const small = (id, labels, hard = false) => ({ id, task: 'grill in the hub', question: `Which way for ${id}?`,
+const small = (id, labels, hard = false) => ({ id, task: 'questions in the hub', question: `Which way for ${id}?`,
   ...(hard ? { hard_to_undo: true } : { hard_to_undo: false, say_ok: 'take the first' }), today: 'Today.', problem: 'Problem.',
   options: labels.map((label) => ({ label, get: 'g', cost: 'c', undo: 'u' })) });
 const q1 = (id) => `document.querySelector('.q[data-q="${id}"]')`;
@@ -684,7 +685,7 @@ const DECOR = `JSON.stringify({ coarse: matchMedia('(pointer: coarse)').matches,
   panel: getComputedStyle(document.querySelector('.panel')).backgroundImage, opt: getComputedStyle(document.querySelector('.opt')).transitionDuration })`;
 const decorated = (b) => b.includes('url(') && b.includes('radial-gradient');
 
-if (run('grill')) {
+if (run('ask')) {
   const png = path.join(dir, 'shot.png');
   fs.writeFileSync(png, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYPgPAAEDAQB6OsbwAAAAAElFTkSuQmCC', 'base64'));
   // Long unbroken tokens, which only overflow-wrap breaks at 390px.
@@ -876,7 +877,7 @@ if (run('grill')) {
 }
 
 // --- two relays of one session ask the same id --------------------------------
-if (run('grill2')) {
+if (run('ask2')) {
   const port = 4321;
   await fresh(port, ['A']);
   const base = `http://127.0.0.1:${port}`;
@@ -1241,5 +1242,9 @@ if (run('shots')) {
   console.log('screenshots in', process.env.SHOTS || dir);
 }
 
+if (only && !ran) {
+  console.log(`unknown step: ${only}`);
+  process.exit(2);
+}
 console.log(failures ? `${failures} FAILED` : 'all passed');
 process.exit(failures ? 1 : 0);

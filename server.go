@@ -89,8 +89,8 @@ func (h *hub) mux(local bool) http.Handler {
 	if !local {
 		ask, ack, report = http.NotFound, http.NotFound, http.NotFound
 	}
-	mux.HandleFunc("POST /api/grill/ask", ask)
-	mux.HandleFunc("POST /api/grill/report", report)
+	mux.HandleFunc("POST /api/ask", ask)
+	mux.HandleFunc("POST /api/report", report)
 	mux.HandleFunc("POST /api/q/{token}/ack", ack)
 	files := http.FileServerFS(uiFS)
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
@@ -189,7 +189,7 @@ func (h *hub) events(w http.ResponseWriter, r *http.Request, bf *served) {
 	// page reloads the board on open.
 	io.WriteString(w, ":\n\n")
 	signal(s.list)
-	signal(s.grill)
+	signal(s.sessions)
 	for {
 		select {
 		case <-r.Context().Done():
@@ -202,11 +202,11 @@ func (h *hub) events(w http.ResponseWriter, r *http.Request, bf *served) {
 		case <-s.list:
 			data, _ := json.Marshal(h.list())
 			fmt.Fprintf(w, "event: boards\ndata: %s\n\n", data)
-		case <-s.grill:
+		case <-s.sessions:
 			h.mu.Lock()
-			data := h.grillEventLocked("")
+			data := h.sessionsEventLocked("")
 			h.mu.Unlock()
-			fmt.Fprintf(w, "event: grill\ndata: %s\n\n", data)
+			fmt.Fprintf(w, "event: sessions\ndata: %s\n\n", data)
 		}
 		w.(http.Flusher).Flush()
 	}

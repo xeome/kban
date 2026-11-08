@@ -15,7 +15,7 @@ import (
 
 type pushed struct{ path, click, body string }
 
-func ntfy(t *testing.T, g *grillHub) <-chan pushed {
+func ntfy(t *testing.T, g *sessionHub) <-chan pushed {
 	t.Helper()
 	got := make(chan pushed, 16)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -26,7 +26,7 @@ func ntfy(t *testing.T, g *grillHub) <-chan pushed {
 	g.h.push.ntfy = srv.URL + "/"
 	g.h.push.delay = time.Hour
 	g.h.push.topic = filepath.Join(g.dir, "topic")
-	os.WriteFile(g.h.push.topic, []byte("grill-test-topic\n"), 0o644)
+	os.WriteFile(g.h.push.topic, []byte("test-topic\n"), 0o644)
 	g.h.mu.Lock()
 	g.h.tail = "http://100.64.0.1:4177"
 	g.h.mu.Unlock()
@@ -54,7 +54,7 @@ func one(t *testing.T, got <-chan pushed, why string) pushed {
 }
 
 func TestAnUnansweredQuestionPushesItsTailnetLinkOnce(t *testing.T) {
-	g := startGrill(t)
+	g := startSessions(t)
 	got := ntfy(t, g)
 	r := g.relay("sess-1")
 	r.ask(question())
@@ -63,7 +63,7 @@ func TestAnUnansweredQuestionPushesItsTailnetLinkOnce(t *testing.T) {
 	none(t, got, "before the delay")
 	g.h.push.tick(time.Now().Add(time.Hour + time.Second))
 	p := one(t, got, "after the delay")
-	if p.path != "/grill-test-topic" || p.click != "http://100.64.0.1:4177/s/sess-1" ||
+	if p.path != "/test-topic" || p.click != "http://100.64.0.1:4177/s/sess-1" ||
 		p.body != "session store\nD7: Which store holds sessions?" {
 		t.Errorf("pushed %+v", p)
 	}
@@ -72,20 +72,20 @@ func TestAnUnansweredQuestionPushesItsTailnetLinkOnce(t *testing.T) {
 }
 
 func TestNoPushForAQuestionClosedInTimeOrWithNowhereToSend(t *testing.T) {
-	later := func(g *grillHub) { g.h.push.tick(time.Now().Add(2 * time.Hour)) }
+	later := func(g *sessionHub) { g.h.push.tick(time.Now().Add(2 * time.Hour)) }
 	for _, c := range []struct {
 		name string
-		do   func(g *grillHub, r *relayProc, id int)
+		do   func(g *sessionHub, r *relayProc, id int)
 	}{
-		{"answered", func(g *grillHub, r *relayProc, id int) {
+		{"answered", func(g *sessionHub, r *relayProc, id int) {
 			g.answer(g.token("s", "D7"), map[string]any{"kind": "defer"})
 			r.answerOf(id)
 		}},
-		{"cancelled", func(g *grillHub, r *relayProc, id int) { r.cancel(id); g.last("s", "D7", "cancelled") }},
-		{"no topic file", func(g *grillHub, _ *relayProc, _ int) { os.Remove(g.h.push.topic) }},
+		{"cancelled", func(g *sessionHub, r *relayProc, id int) { r.cancel(id); g.last("s", "D7", "cancelled") }},
+		{"no topic file", func(g *sessionHub, _ *relayProc, _ int) { os.Remove(g.h.push.topic) }},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			g := startGrill(t)
+			g := startSessions(t)
 			got := ntfy(t, g)
 			r := g.relay("s")
 			id := r.ask(question())
@@ -96,7 +96,7 @@ func TestNoPushForAQuestionClosedInTimeOrWithNowhereToSend(t *testing.T) {
 		})
 	}
 	t.Run("off the tailnet", func(t *testing.T) {
-		g := startGrill(t)
+		g := startSessions(t)
 		got := ntfy(t, g)
 		g.h.tail = ""
 		g.h.push.locked = func() bool { return true }
@@ -109,7 +109,7 @@ func TestNoPushForAQuestionClosedInTimeOrWithNowhereToSend(t *testing.T) {
 }
 
 func TestALockedScreenPushesAtAskTime(t *testing.T) {
-	g := startGrill(t)
+	g := startSessions(t)
 	got := ntfy(t, g)
 	g.h.push.locked = func() bool { return true }
 	r := g.relay("s")
@@ -124,7 +124,7 @@ func TestALockedScreenPushesAtAskTime(t *testing.T) {
 func TestASilentNtfyNeverStallsThePollLoop(t *testing.T) {
 	path := newBoardFile(t, t.TempDir(), "TODO.json", "A")
 	h, ts := startHub(t, path)
-	g := &grillHub{t: t, h: h, ts: ts, dir: t.TempDir()}
+	g := &sessionHub{t: t, h: h, ts: ts, dir: t.TempDir()}
 	h.ackWait = time.Hour
 	held, ended := make(chan struct{}, 1), make(chan struct{}, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -192,7 +192,7 @@ func seen(t *testing.T, base, ctype string, body any) int {
 }
 
 func TestSeenDropsOnlyWhatItNames(t *testing.T) {
-	g := startGrill(t)
+	g := startSessions(t)
 	ntfy(t, g)
 	g.h.push.add("T1", "T1", "q1")
 	g.h.push.add("T2", "T2", "q2")
@@ -212,7 +212,7 @@ func TestSeenDropsOnlyWhatItNames(t *testing.T) {
 
 // The phone's seen counts, but only a desktop tab's ack stops xdg-open.
 func TestSeenFromThePhoneDropsTheQuestionButOpensATab(t *testing.T) {
-	g := startGrill(t)
+	g := startSessions(t)
 	ntfy(t, g)
 	g.relay("s").ask(question())
 	tok := g.token("s", "D7")
@@ -230,7 +230,7 @@ func TestSeenFromThePhoneDropsTheQuestionButOpensATab(t *testing.T) {
 
 // The desktop tab claims to show what hyprlock hides; the phone's tab does not.
 func TestALockedScreenIgnoresOnlyTheDesktopsSeen(t *testing.T) {
-	g := startGrill(t)
+	g := startSessions(t)
 	ntfy(t, g)
 	locked := false
 	g.h.push.locked = func() bool { return locked }

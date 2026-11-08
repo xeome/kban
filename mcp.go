@@ -15,8 +15,6 @@ import (
 	"sync"
 )
 
-// grill's ask tool, schema and description unchanged from grill's own server.
-//
 //go:embed ask.json
 var askSchema json.RawMessage
 
@@ -47,7 +45,7 @@ func mcp(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if fl.Parse(args) != nil {
 		return 1
 	}
-	r := &relay{id: token(), session: os.Getenv("CLAUDE_CODE_SESSION_ID"), url: fmt.Sprintf("http://127.0.0.1:%d/api/grill/", *port),
+	r := &relay{id: token(), session: os.Getenv("CLAUDE_CODE_SESSION_ID"), url: fmt.Sprintf("http://127.0.0.1:%d/api/", *port),
 		out: stdout, calls: map[string]context.CancelFunc{}}
 	if r.session == "" {
 		r.session = r.id
@@ -84,7 +82,7 @@ func (r *relay) handle(line []byte, stderr io.Writer) {
 		var p struct{ ProtocolVersion string }
 		json.Unmarshal(msg.Params, &p)
 		reply(map[string]any{"protocolVersion": p.ProtocolVersion, "capabilities": map[string]any{"tools": map[string]any{}},
-			"serverInfo": map[string]any{"name": "grill", "version": "kban"}})
+			"serverInfo": map[string]any{"name": "kban", "version": "kban"}})
 	case "tools/list":
 		reply(map[string]any{"tools": []any{map[string]any{"name": "ask", "description": askDescription, "inputSchema": askSchema},
 			map[string]any{"name": "report", "description": reportDescription, "inputSchema": reportSchema}}})
