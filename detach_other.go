@@ -7,6 +7,6 @@ import (
 	"os"
 )
 
-func startDetached(port int) (*os.Process, error) {
+func startDetached(args []string) (*os.Process, error) {
 	return nil, errors.New("-d needs a Unix system")
 }
