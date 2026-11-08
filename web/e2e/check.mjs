@@ -1097,6 +1097,119 @@ if (run('push')) {
   ntfy.close();
 }
 
+// --- the sidebar folds to a rail -----------------------------------------------
+if (run('fold')) {
+  // Its own registry, so the rail holds two boards, not every step's.
+  const port = 4324;
+  const fdir = fs.mkdtempSync(path.join(dir, 'fold-'));
+  const fenv = { ...env, XDG_CONFIG_HOME: fdir };
+  const fA = path.join(fdir, 'A.json');
+  const other = path.join(fdir, 'other.json');
+  fs.writeFileSync(fA, JSON.stringify(board(['A1']), null, 2));
+  fs.writeFileSync(other, JSON.stringify(board(['B1']), null, 2));
+  const p = await tab(await server(fA, port, false, fenv));
+  await p.ev(`document.documentElement.dataset.theme = 'dark'`);
+  const b = join(other, port, fenv);
+  const r = relay(port, 'fold-1');
+  const ask = r.ask(small('F1', ['Yes', 'No']));
+  const asked = '#side .item.ask[href="/s/fold-1"]';
+  const ready = await p.until(`!!document.querySelector('${asked}') && !!document.querySelector('${entry(b.id)}')`) >= 0 && kban('add', '-f', other, 'Todo', 'agent on B');
+  check('fold setup: a question row and a board with a change dot', ready && await p.until(dot(b.id)) >= 0);
+
+  const W = `document.querySelector('#side').getBoundingClientRect().width`;
+  const is = async (w, open) => await p.until(`${W} === ${w} && document.querySelector('#fold')?.getAttribute('aria-expanded') === '${open}'`, 1000) >= 0; // past the slide
+  const looks = (sel, prop) => `getComputedStyle(document.querySelector('${sel}'), '::after').${prop}`;
+  const label = `getComputedStyle(document.querySelector('${entry(b.id)} .label')).opacity`;
+  const state = () => p.ev(`${W} + 'px expanded=' + document.querySelector('#fold')?.getAttribute('aria-expanded') + ' label=' + ${label}`);
+  const shoot = async (name) => fs.writeFileSync(path.join(process.env.SHOTS || dir, name), Buffer.from((await p.send('Page.captureScreenshot', { format: 'png' })).result.data, 'base64'));
+  const bracket = async () => {
+    for (const type of ['keyDown', 'keyUp']) await p.send('Input.dispatchKeyEvent', { type, key: '[', code: 'BracketLeft', windowsVirtualKeyCode: 219, ...(type === 'keyDown' ? { text: '[' } : {}) });
+  };
+
+  check('open by default: 200px, labels shown, the toggle says it collapses, no rail tooltip',
+    await is(200, true) && await p.ev(label) === '1' && await p.ev(looks(entry(b.id), 'content')) === 'none', await state());
+  await shoot('side-open-1440-dark.png');
+
+  await p.click('#fold');
+  check('the toggle folds it to a 40px rail with its labels faded', await is(40, false) && await p.ev(label) === '0', await state());
+  const onTile = (row, mark) => p.ev(`(() => {
+    const r = document.querySelector('${row}'), m = r?.querySelector('${mark}'), t = r?.querySelector('.tile')?.getBoundingClientRect();
+    if (!m || !t) return 'no ${mark} or tile';
+    const b = m.getBoundingClientRect(), s = document.querySelector('#side').getBoundingClientRect();
+    const hit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+    return (b.left < t.right && b.right > t.left && b.top < t.bottom && b.bottom > t.top && b.right <= s.right + 1
+      && m.checkVisibility({ opacityProperty: true }) && m.contains(hit)) || JSON.stringify({ tile: [t.left, t.top, t.right], mark: [b.left, b.top, b.right], rail: s.right });
+  })()`);
+  let at = await onTile(asked, '.badge');
+  check('folded, the question\'s ? badge shows on its tile', at === true, at);
+  at = await onTile(entry(b.id), '.dot');
+  check('folded, the changed board\'s dot shows on its tile', at === true, at);
+
+  const [x, y] = await p.ev(`(() => { const t = document.querySelector('${entry(b.id)} .tile')?.getBoundingClientRect() || document.querySelector('${entry(b.id)}').getBoundingClientRect(); return [t.left + t.width / 2, t.top + t.height / 2]; })()`);
+  await p.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
+  await sleep(600); // past the tooltip's .3s delay
+  const tip = await p.ev(`${looks(entry(b.id), 'content')} + ' opacity=' + ${looks(entry(b.id), 'opacity')}`);
+  // The alt text after / keeps the tooltip out of the row's accessible name.
+  check('folded, hovering a board\'s tile shows a tooltip naming its project and file', tip === `"${path.basename(fdir)} / other.json" / "" opacity=1`, tip);
+  await shoot('side-rail-1440-dark.png');
+  await p.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 700, y: 400 });
+
+  await p.send('Emulation.setFocusEmulationEnabled', { enabled: true });
+  await p.ev(`window.__seen = []; const f1 = window.fetch; window.fetch = (u, o) => { if (u === '/api/seen') window.__seen.push(...JSON.parse(o.body).tokens); return f1(u, o); }`);
+  const r2 = relay(port, 'fold-2');
+  const ask2 = r2.ask(small('F2', ['Yes', 'No']));
+  const told = await p.until(`(() => { const t = document.querySelector('#side .item.ask[href="/s/fold-2"]')?.dataset.token; return !!t && window.__seen.includes(t); })()`) >= 0;
+  check('folded, a question reaching the rail is posted to /api/seen, so the hub does not push it', told, await p.ev(`JSON.stringify(window.__seen) + ' ' + ${W}`));
+
+  // The tooltip takes hits for the probe, so elementFromPoint finds it beside the rail.
+  await p.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 150, deviceScaleFactor: 1, mobile: false });
+  await sleep(300);
+  const scrolls = await p.ev(`(() => { const s = document.querySelector('#side'), h = [s.scrollHeight, s.clientHeight]; s.scrollTop = s.scrollHeight;
+    return (h[0] > h[1] && s.scrollTop > 0) || JSON.stringify({ scrollHeight: h[0], clientHeight: h[1], scrollTop: s.scrollTop }); })()`);
+  await p.ev(`document.head.insertAdjacentHTML('beforeend', '<style id="hit">#side.rail .tip::after { pointer-events: auto !important }</style>')`);
+  const lastRow = `[...document.querySelectorAll('#groups .item')].at(-1)`;
+  const [lx, ly] = await p.ev(`(() => { const t = ${lastRow}.querySelector('.tile').getBoundingClientRect(); return [t.left + t.width / 2, t.top + t.height / 2]; })()`);
+  await p.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: lx, y: ly });
+  await sleep(600);
+  const beside = await p.ev(`(() => { const row = ${lastRow}, x = document.querySelector('#side').getBoundingClientRect().right + 20, hit = document.elementFromPoint(x, ${ly});
+    return (getComputedStyle(row, '::after').opacity === '1' && row.contains(hit)) || 'at ' + x + ',' + ${ly} + ': ' + (hit?.className || hit?.tagName) + ' ' + (hit?.dataset?.tip || ''); })()`);
+  check('folded and taller than the window, the rail scrolls and a hovered tile\'s tooltip shows beside it', scrolls === true && beside === true, `${scrolls} ${beside}`);
+  await p.ev(`document.querySelector('#hit').remove(); document.querySelector('#side').scrollTop = 0`);
+  await p.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 700, y: 100 });
+  await p.send('Emulation.clearDeviceMetricsOverride');
+  r2.cancel(ask2);
+
+  await bracket();
+  check('[ unfolds it', await is(200, true), await state());
+  await bracket();
+  check('[ folds it again', await is(40, false), await state());
+
+  await p.ev('window.__old = 1');
+  await p.send('Page.reload');
+  const reloaded = await p.until(`!window.__old && document.querySelectorAll('.card').length === 1`) >= 0;
+  check('the rail survives a reload', reloaded && await is(40, false), `reloaded=${reloaded} ${await state()}`);
+
+  await p.click('#note');
+  await bracket();
+  await sleep(400);
+  check('[ typed into a field types it and leaves the rail folded',
+    await p.ev(`document.querySelector('#note').value.endsWith('[')`) && await is(40, false), await state());
+  await p.ev('document.activeElement.blur()');
+
+  await p.click('#fold');
+  check('the toggle unfolds it', await is(200, true), await state());
+
+  await p.click('#fold');
+  await is(40, false);
+  await p.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+  await sleep(400);
+  const strip = await p.ev(`(() => { const s = document.querySelector('#side');
+    return getComputedStyle(s).flexDirection + ' ' + s.getBoundingClientRect().width + 'px toggle=' + !!document.querySelector('#fold')?.checkVisibility() + ' label=' + ${label}; })()`);
+  check('at 390px, folded or not, the sidebar is the strip it was', strip === 'row 382px toggle=false label=1', strip);
+  await p.send('Emulation.clearDeviceMetricsOverride');
+  r.cancel(ask);
+}
+
 // --- screenshots for a look ----------------------------------------------------
 if (run('shots')) {
   const { f, p } = await fresh(4307, ['Fix login redirect', 'Write parser', 'Paging off-by-one']);

@@ -5,7 +5,11 @@
 <title>kban</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/app.css">
-<nav id="side" aria-label="Boards"></nav>
+<nav id="side" aria-label="Boards">
+  <div class="top"><button id="fold" class="item tip"><svg viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="2"/><path d="M6.5 3v10"/></svg></button></div>
+  <div id="groups"></div>
+</nav>
+<script>try { if (localStorage.side === 'rail') document.getElementById('side').classList.add('rail'); } catch {}</script>
 <div class="panel">
 <header>
   <span id="file"></span>
@@ -25,6 +29,7 @@
   <span><kbd>⇧</kbd>+arrows move</span>
   <span><kbd>u</kbd> undo</span>
   <span><kbd>+</kbd> column</span>
+  <span><kbd>[</kbd> sidebar</span>
 </footer>
 </div>
 
