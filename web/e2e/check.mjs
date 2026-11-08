@@ -1003,8 +1003,8 @@ if (run('report')) {
 }
 
 // --- pushes: only what the owner was not shown --------------------------------
-// Each "none" row makes a control item on board C, which
-// no tab shows, and asserts only once the control's push has arrived.
+// Each "none" row asks a control question whose sidebar row is hidden, so
+// no tab shows it, and asserts only once the control's push has arrived.
 if (run('push')) {
   const port = 4322;
   const pdir = path.join(dir, 'push');
@@ -1022,112 +1022,78 @@ if (run('push')) {
   });
   await new Promise((r) => ntfy.listen(0, '127.0.0.1', r));
   const penv = { ...env, HOME: pdir, XDG_CONFIG_HOME: pdir, PATH: `${pbin}:${env.PATH}`, KBAN_PUSH_DELAY: '3s', KBAN_NTFY: `http://127.0.0.1:${ntfy.address().port}/` };
-  const cols = (titles, todo = []) => ({ instructions: 'test', columns: titles.map((title, i) => ({ title, cards: i ? [] : todo.map((t) => ({ id: `id-${t}`, title: t })) })) });
-  const files = { A: cols(['Todo', 'Doing', 'Building', 'Blocked', 'Waiting', 'Review'], ['A1']), B: cols(['Todo', 'Review'], ['B1']), C: cols(['Todo', 'Approve']) };
-  for (const [n, b] of Object.entries(files)) fs.writeFileSync(path.join(pdir, `${n}.json`), JSON.stringify(b, null, 2));
-  const [fA, fB, fC] = ['A', 'B', 'C'].map((n) => path.join(pdir, `${n}.json`));
+  const fA = path.join(pdir, 'A.json');
+  fs.writeFileSync(fA, JSON.stringify({ instructions: 'test', columns: [{ title: 'Todo', cards: [] }] }, null, 2));
   const url = await server(fA, port, false, penv);
-  const k = procs.at(-1);
-  const idA = url.split('/').at(-1);
-  const idB = join(fB, port, penv).id;
-  const idC = join(fC, port, penv).id;
   const tail = `http://127.0.0.2:${port}`;
-  const link = (id, card) => `${tail}/b/${id}#card=${card}`;
-  const add = (f, col, title) => spawnSync(bin, ['add', '-f', f, col, title], { encoding: 'utf8' }).stdout.trim();
   const posted = (l) => posts.filter((x) => x.click === l).length;
   const arrives = async (l, ms = 8000) => { for (const t0 = Date.now(); Date.now() - t0 < ms; await sleep(50)) if (posted(l)) return true; return false; };
+  // Its session sorts after every push-N, so its row is a new element, not
+  // a shown row Preact reuses and the tab already counts as seen. It comes
+  // due up to a tick after the item it controls, and both may post at once,
+  // so pushed() waits a tick more before a row reads posted().
   let n = 0;
-  const control = () => arrives(link(idC, add(fC, 'Approve', `control ${++n}`)), 10000);
+  const control = () => {
+    const i = ++n;
+    const r = relay(port, `unseen-${i}`);
+    const ask = r.ask(small(`C${i}`, ['Yes', 'No']));
+    return {
+      asked: () => p.until(`!!document.querySelector('#side .item.ask[href="/s/unseen-${i}"]')`),
+      pushed: async () => { const got = await arrives(`${tail}/s/unseen-${i}`, 10000); await sleep(600); r.cancel(ask); return got; },
+    };
+  };
   const p = await tab(url);
   await p.send('Emulation.setFocusEmulationEnabled', { enabled: true });
-  const card = async (title) => {
-    const id = add(fA, 'Todo', title);
-    await p.until(`!!document.querySelector('.card[data-id="${id}"]')`);
-    return id;
+  await p.ev(`document.head.insertAdjacentHTML('beforeend', '<style>#side .item.ask[href^="/s/unseen-"] { display: none }</style>')`);
+  const asks = [];
+  const question = async (i) => {
+    const r = relay(port, `push-${i}`);
+    asks.push([r, r.ask(small(`P${i}`, ['Yes', 'No']))]);
+    return await p.until(`!!document.querySelector('#side .item.ask[href="/s/push-${i}"]')`) >= 0;
   };
-  const onScreen = (c) => `(() => { const r = document.querySelector('.col[data-c="${c}"]').getBoundingClientRect(); return r.left + r.width / 2 >= 0 && r.right - r.width / 2 <= innerWidth; })()`;
+  const link = (i) => `${tail}/s/push-${i}`;
+  const clicks = () => JSON.stringify(posts.map((q) => q.click));
 
-  let x = await card('X1');
-  const off = await p.ev(`${onScreen(0)} && !${onScreen(5)} && document.hasFocus() && document.visibilityState === 'visible'`);
-  kban('move', '-f', fA, x, 'Review');
-  const x1 = x;
-  check('a card moved into an off-screen Review pushes its tailnet link and title',
-    off && await arrives(link(idA, x)) && posts.find((q) => q.click === link(idA, x1)).body.includes('X1') && posts[0].path === '/e2e', `off=${off} ${JSON.stringify(posts)}`);
+  const row = await question(1);
+  check('a question reaching the focused tab\'s sidebar: no push', row && await control().pushed() && !posted(link(1)), `row=${row} ${clicks()}`);
 
-  // A column title being edited holds the board on screen: the card still shows in Todo.
-  x = await card('Held');
-  await p.click('.col[data-c="0"] .col-head .t');
-  const editing = await p.ev(`!!document.querySelector('.col-head input')`);
-  kban('move', '-f', fA, x, 'Review');
-  check('a card moved while the screen holds an older board: a push', editing && await arrives(link(idA, x)), `editing=${editing}`);
-  await p.key('Escape');
-
-  x = await card('X2');
-  kban('move', '-f', fA, x, 'Review');
-  await sleep(800);
-  for (let i = 0; i < 5; i++) await p.key('l');
-  const into = await p.until(onScreen(5)) >= 0;
-  check('Review scrolled into view before the delay: no push', into && await control() && !posted(link(idA, x)), `into=${into} ${JSON.stringify(posts)}`);
-
-  x = await card('X3');
-  kban('move', '-f', fA, x, 'Review');
-  check('a card moved into Review on screen: no push', await p.ev(onScreen(5)) && await control() && !posted(link(idA, x)));
+  await p.ev(`document.head.insertAdjacentHTML('beforeend', '<style id="away">#side { padding-top: 3000px }</style>')`);
+  await question(2);
+  check('its sidebar row out of view: a push of the question to the topic',
+    await arrives(link(2)) && posts.some((q) => q.click === link(2) && q.path === '/e2e' && q.body.includes('Which way for P2?')), JSON.stringify(posts));
+  // The control's own stream event comes before the row scrolls in, so only the scroll tells.
+  await question(3);
+  let c = control();
+  await c.asked();
+  await p.ev(`document.querySelector('#away').remove()`);
+  check('its row scrolled into view before the delay: no push', await c.pushed() && !posted(link(3)), clicks());
 
   await p.ev(`Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true }); document.dispatchEvent(new Event('visibilitychange'))`);
-  x = await card('X4');
-  kban('move', '-f', fA, x, 'Review');
-  check('the page hidden: a push', await arrives(link(idA, x)));
+  await question(4);
+  check('the page hidden: a push', await arrives(link(4)), clicks());
   await p.ev(`delete document.visibilityState; document.dispatchEvent(new Event('visibilitychange'))`);
 
   await p.ev(`document.hasFocus = () => false; dispatchEvent(new Event('blur'))`);
-  x = await card('X5');
-  kban('move', '-f', fA, x, 'Review');
-  check('the page visible but unfocused: a push', await arrives(link(idA, x)));
-  x = await card('X6');
-  kban('move', '-f', fA, x, 'Review');
+  await question(5);
+  check('the page visible but unfocused: a push', await arrives(link(5)), clicks());
+  await question(6);
+  c = control();
+  await c.asked();
   await sleep(1000);
   await p.ev(`delete document.hasFocus; dispatchEvent(new Event('focus'))`);
-  check('focused again before the delay: no push', await p.ev('document.hasFocus()') && await control() && !posted(link(idA, x)));
+  check('focused again before the delay: no push', await p.ev('document.hasFocus()') && await c.pushed() && !posted(link(6)), clicks());
 
-  const y1 = add(fB, 'Todo', 'Y1');
-  kban('move', '-f', fB, y1, 'Review');
-  await p.click(entry(idB));
-  const onB = await p.until(`location.pathname === '/b/${idB}' && !!document.querySelector('.card[data-id="${y1}"]')`, 5000) >= 0;
-  check('a sidebar click to the board before the delay: no push', onB && await control() && !posted(link(idB, y1)), `onB=${onB}`);
-
-  await p.click('.card[data-id="id-B1"]');
+  const m = spawnSync(bin, ['add', '-f', fA, 'Todo', 'M1'], { encoding: 'utf8' }).stdout.trim();
+  await p.until(`!!document.querySelector('.card[data-id="${m}"]')`);
+  await p.click(`.card[data-id="${m}"]`);
   const modal = await p.until(`document.querySelector('#card').open`) >= 0;
-  const y2 = add(fB, 'Todo', 'Y2');
-  kban('move', '-f', fB, y2, 'Review');
-  check('the modal open over a Review card: a push', modal && await arrives(link(idB, y2)) && await p.ev(`!!document.querySelector('.card[data-id="${y2}"]')`));
+  await question(7);
+  check('the card modal open over the sidebar: a push', modal && await arrives(link(7)), `modal=${modal} ${clicks()}`);
   await p.ev(`document.querySelector('#card').close()`);
-
-  const r1 = relay(port, 'push-1');
-  const ask1 = r1.ask(small('P1', ['Yes', 'No']));
-  const row = await p.until(`!!document.querySelector('#side .item.ask[data-token]')`) >= 0;
-  check('a question reaching the focused tab\'s sidebar: no push', row && await control() && !posted(`${tail}/s/push-1`), `row=${row}`);
-  await p.ev(`document.head.insertAdjacentHTML('beforeend', '<style id="away">#side { padding-top: 3000px }</style>')`);
-  const r2 = relay(port, 'push-2');
-  const ask2 = r2.ask(small('P2', ['Yes', 'No']));
-  check('its sidebar row out of view: a push', await arrives(`${tail}/s/push-2`), JSON.stringify(posts.map((q) => q.click)));
-  await p.ev(`document.querySelector('#away').remove()`);
-  r1.cancel(ask1);
-  r2.cancel(ask2);
+  for (const [r, ask] of asks) r.cancel(ask);
 
   const once = posts.map((q) => q.click).filter((c, i, all) => all.indexOf(c) !== i);
   check('no link pushed twice', !once.length, JSON.stringify(once));
-
-  const q = await tab(`${tail}/b/${idB}`);
-  await q.send('Page.navigate', { url: link(idA, x1) }); // the DevTools endpoint drops a URL's fragment
-  const opened = await q.until(`document.querySelector('#card').open && document.querySelector('#card-title').value === 'X1'`) >= 0;
-  await q.ev(`document.querySelector('#card').close()`);
-  k.kill('SIGKILL');
-  await new Promise((r) => k.once('exit', r));
-  await server(fA, port, false, penv);
-  add(fA, 'Todo', 'after the reopen');
-  const back = await q.until(`[...document.querySelectorAll('.card .t')].some((e) => e.textContent === 'after the reopen')`, 8000) >= 0;
-  check('the push\'s link opens its card; closed, it stays closed after the stream reopens',
-    opened && back && await q.ev(`!document.querySelector('#card').open`), `opened=${opened} back=${back}`);
   ntfy.close();
 }
 

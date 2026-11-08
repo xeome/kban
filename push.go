@@ -11,11 +11,11 @@ import (
 	"time"
 )
 
-// push sends a link to the owner's phone through ntfy.sh, one per item that
-// waits on them: a question, or a card entering Approve or Review.
+// push sends a link to the owner's phone through ntfy.sh, one per question
+// that waits on them.
 type push struct {
 	mu     sync.Mutex
-	items  map[[2]string]pushItem
+	items  map[string]pushItem
 	delay  time.Duration
 	locked func() bool
 	topic  string
@@ -23,18 +23,16 @@ type push struct {
 	client *http.Client
 }
 
-// A card's item has its board's id and the card's id for key; a question's
-// has no board and its token for key.
 type pushItem struct {
-	key, board, link, text string
-	due                    time.Time
+	link, text string
+	due        time.Time
 }
 
 // KBAN_PUSH_DELAY and KBAN_NTFY let web/e2e drive the real binary.
 func newPush() *push {
 	home, _ := os.UserHomeDir()
 	p := &push{
-		items:  map[[2]string]pushItem{},
+		items:  map[string]pushItem{},
 		delay:  300 * time.Second,
 		locked: func() bool { return exec.Command("pidof", "hyprlock").Run() == nil },
 		topic:  filepath.Join(home, ".config", "claude-notify", "topic"),
@@ -50,39 +48,34 @@ func newPush() *push {
 	return p
 }
 
-func (p *push) add(board, key, link, text string) {
+func (p *push) add(token, link, text string) {
 	due := time.Now().Add(p.delay)
 	if p.locked() {
 		due = time.Now()
 	}
 	p.mu.Lock()
-	p.items[[2]string{board, key}] = pushItem{key, board, link, text, due}
+	p.items[token] = pushItem{link, text, due}
 	p.mu.Unlock()
 }
 
-func (p *push) drop(board, key string) {
+func (p *push) drop(token string) {
 	p.mu.Lock()
-	delete(p.items, [2]string{board, key})
+	delete(p.items, token)
 	p.mu.Unlock()
 }
 
 // While hyprlock runs, a desktop tab (local) claims to show what the lock
 // hides, so only the phone's seen counts.
-func (p *push) seen(board string, cards, tokens []string, local bool) {
-	var keys [][2]string
+func (p *push) seen(tokens []string, local bool) {
 	p.mu.Lock()
-	for k, it := range p.items {
-		if it.board == "" && slices.Contains(tokens, it.key) || it.board != "" && it.board == board && slices.Contains(cards, it.key) {
-			keys = append(keys, k)
-		}
-	}
+	open := slices.ContainsFunc(tokens, func(t string) bool { _, ok := p.items[t]; return ok })
 	p.mu.Unlock()
-	if len(keys) == 0 || local && p.locked() {
+	if !open || local && p.locked() {
 		return
 	}
 	p.mu.Lock()
-	for _, k := range keys {
-		delete(p.items, k)
+	for _, t := range tokens {
+		delete(p.items, t)
 	}
 	p.mu.Unlock()
 }
