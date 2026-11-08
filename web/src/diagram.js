@@ -29,7 +29,7 @@ function config() {
       'themeCSS', 'fontFamily', 'altFontFamily', 'themeVariables'],
     flowchart: { ...off, htmlLabels: false, curve: 'basis' }, sequence: off, class: off, state: off, er: off, gantt: off,
     journey: off, pie: off, mindmap: off, timeline: off, gitGraph: off, quadrantChart: off, xyChart: off, requirement: off,
-    theme: 'base', fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif', themeVariables: theme(),
+    theme: 'base', look: 'classic', fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif', themeVariables: theme(),
   };
 }
 
