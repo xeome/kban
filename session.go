@@ -21,7 +21,7 @@ import (
 	"unicode/utf8"
 )
 
-// Grill questions: each agent session's `kban mcp` relay posts a question
+// Questions: each agent session's `kban mcp` relay posts a question
 // and holds the request until a tab answers it. The held request is the
 // question's life: when it ends, by a terminal cancel or a session that
 // ended, the question is cancelled.
@@ -44,8 +44,8 @@ var (
 	limits      = map[string]int{"context": 4, "detail": 6, "rows": 4, "block_rows": 2, "columns": 8, "table_rows": 30, "stats": 4}
 )
 
-type gsession struct {
-	source  *gsource
+type session struct {
+	source  *source
 	sitting []*asked
 }
 
@@ -57,14 +57,14 @@ type report struct {
 }
 
 // The hub keeps the newest reportMax reports of all its sessions in one list,
-// in memory: a restart loses them, as it loses the sitting. Every grill event
-// carries the list, so a report's text is capped.
+// in memory: a restart loses them, as it loses the sitting. A session page's
+// event carries that session's reports, marshalled under h.mu, so a report's text is capped.
 const (
 	reportMax  = 50
 	reportText = 64 << 10
 )
 
-type gsource struct {
+type source struct {
 	Project string `json:"project"`
 	Path    string `json:"path"`
 	Branch  string `json:"branch"`
@@ -85,13 +85,12 @@ type asked struct {
 	done                      chan []byte
 }
 
-// closeLocked ends an open question and drops what only an open one needs.
 // h.questions holds open questions only. Call with h.mu held.
 func (h *hub) closeLocked(e *asked, status string) {
 	e.status = status
 	e.raw, e.q, e.files = nil, nil, nil
 	delete(h.questions, e.token)
-	h.grillChangedLocked()
+	h.sessionsChangedLocked()
 }
 
 type answer struct {
@@ -359,7 +358,7 @@ func projectOf(dir string) string {
 }
 
 // where is read at each ask: branches move.
-func where(cwd string) gsource {
+func where(cwd string) source {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	out, _ := exec.CommandContext(ctx, "git", "-C", cwd, "branch", "--show-current").Output()
@@ -367,7 +366,7 @@ func where(cwd string) gsource {
 	if home, err := os.UserHomeDir(); err == nil && (cwd == home || strings.HasPrefix(cwd, home+string(filepath.Separator))) {
 		path = "~" + cwd[len(home):]
 	}
-	return gsource{Project: projectOf(cwd), Path: path, Branch: strings.TrimSpace(string(out))}
+	return source{Project: projectOf(cwd), Path: path, Branch: strings.TrimSpace(string(out))}
 }
 
 func jsonOnly(r *http.Request) bool {
@@ -435,12 +434,12 @@ func (h *hub) ask(w http.ResponseWriter, r *http.Request) {
 	h.mu.Lock()
 	s := h.sessions[e.session]
 	if s == nil {
-		s = &gsession{}
+		s = &session{}
 		h.sessions[e.session] = s
 	}
 	s.source = &src
 	s.sitting = append(s.sitting, e)
-	h.grillChangedLocked()
+	h.sessionsChangedLocked()
 	h.mu.Unlock()
 	local := r.Context().Value(http.LocalAddrContextKey).(net.Addr).String()
 	ack := time.AfterFunc(h.ackWait, func() {
@@ -497,13 +496,13 @@ func (h *hub) report(w http.ResponseWriter, r *http.Request) {
 	h.reports = append(h.reports, report{Time: t, Text: req.Text, session: req.Session, project: src.Project})
 	s := h.sessions[req.Session]
 	if s == nil {
-		s = &gsession{}
+		s = &session{}
 		h.sessions[req.Session] = s
 	}
 	if s.source == nil { // an ask's source names its task, so it stays
 		s.source = &src
 	}
-	h.grillChangedLocked()
+	h.sessionsChangedLocked()
 	h.mu.Unlock()
 	io.WriteString(w, "http://"+r.Context().Value(http.LocalAddrContextKey).(net.Addr).String()+"/s/"+url.PathEscape(req.Session))
 }
@@ -639,7 +638,7 @@ type shownQuestion struct {
 	Question json.RawMessage `json:"question"`
 }
 
-func (h *hub) grillEventLocked(session string) []byte {
+func (h *hub) sessionsEventLocked(session string) []byte {
 	ev := struct {
 		Open    []openLine   `json:"open"`
 		Reports []reportLine `json:"reports"`
@@ -662,7 +661,7 @@ func (h *hub) grillEventLocked(session string) []byte {
 	}
 	if session != "" {
 		out := struct {
-			Source    *gsource        `json:"source"`
+			Source    *source         `json:"source"`
 			Sitting   []sittingLine   `json:"sitting"`
 			Questions []shownQuestion `json:"questions"`
 			Reports   []report        `json:"reports"`
@@ -687,14 +686,14 @@ func (h *hub) grillEventLocked(session string) []byte {
 	return data
 }
 
-func (h *hub) grillChangedLocked() {
+func (h *hub) sessionsChangedLocked() {
 	for _, bf := range h.boards {
 		for s := range bf.subs {
-			signal(s.grill)
+			signal(s.sessions)
 		}
 	}
-	for s := range h.gsubs {
-		signal(s.grill)
+	for s := range h.sessionSubs {
+		signal(s.sessions)
 	}
 }
 
@@ -702,18 +701,18 @@ func (h *hub) sessionEvents(w http.ResponseWriter, r *http.Request) {
 	session := r.PathValue("session")
 	s := &stream{make(chan struct{}, 1), make(chan struct{}, 1), make(chan struct{}, 1)}
 	h.mu.Lock()
-	h.gsubs[s] = struct{}{}
+	h.sessionSubs[s] = struct{}{}
 	h.mu.Unlock()
 	defer func() {
 		h.mu.Lock()
-		delete(h.gsubs, s)
+		delete(h.sessionSubs, s)
 		h.mu.Unlock()
 	}()
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-store")
 	io.WriteString(w, ":\n\n")
 	signal(s.list)
-	signal(s.grill)
+	signal(s.sessions)
 	for {
 		select {
 		case <-r.Context().Done():
@@ -721,11 +720,11 @@ func (h *hub) sessionEvents(w http.ResponseWriter, r *http.Request) {
 		case <-s.list:
 			data, _ := json.Marshal(h.list())
 			fmt.Fprintf(w, "event: boards\ndata: %s\n\n", data)
-		case <-s.grill:
+		case <-s.sessions:
 			h.mu.Lock()
-			data := h.grillEventLocked(session)
+			data := h.sessionsEventLocked(session)
 			h.mu.Unlock()
-			fmt.Fprintf(w, "event: grill\ndata: %s\n\n", data)
+			fmt.Fprintf(w, "event: sessions\ndata: %s\n\n", data)
 		}
 		w.(http.Flusher).Flush()
 	}

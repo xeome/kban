@@ -22,14 +22,14 @@ type hub struct {
 	regStamp string
 	sent     []listed // the list as the streams were last told it
 
-	sessions  map[string]*gsession
-	reports   []report             // every session's, oldest first
-	questions map[string]*asked    // by token
-	gsubs     map[*stream]struct{} // /s/{session} pages' streams
-	tail      string               // the tailnet base URL, "" when off the tailnet
-	ackWait   time.Duration
-	browse    func(url string)
-	push      *push
+	sessions    map[string]*session
+	reports     []report             // every session's, oldest first
+	questions   map[string]*asked    // by token
+	sessionSubs map[*stream]struct{} // /s/{session} pages' streams
+	tail        string               // the tailnet base URL, "" when off the tailnet
+	ackWait     time.Duration
+	browse      func(url string)
+	push        *push
 }
 
 type served struct {
@@ -43,7 +43,7 @@ type served struct {
 
 // A stream's signals are latest-wins: it writes the state as it is when it
 // wakes, so a signal that finds one pending loses nothing.
-type stream struct{ board, list, grill chan struct{} }
+type stream struct{ board, list, sessions chan struct{} }
 
 type listed struct {
 	ID      string `json:"id"`
@@ -54,7 +54,7 @@ type listed struct {
 
 func newHub(registry, user string) *hub {
 	h := &hub{registry: registry, user: user, boards: map[string]*served{},
-		sessions: map[string]*gsession{}, questions: map[string]*asked{}, gsubs: map[*stream]struct{}{},
+		sessions: map[string]*session{}, questions: map[string]*asked{}, sessionSubs: map[*stream]struct{}{},
 		ackWait: 3 * time.Second, browse: openBrowser, push: newPush()}
 	h.reload()
 	h.sent = h.list()
@@ -213,7 +213,7 @@ func (h *hub) poll() {
 				signal(s.list)
 			}
 		}
-		for s := range h.gsubs {
+		for s := range h.sessionSubs {
 			signal(s.list)
 		}
 	}

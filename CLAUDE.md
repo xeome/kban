@@ -24,14 +24,14 @@ person and the agents working alongside them.
     server.go   HTTP + SSE, file read/write, the 409 on an unreadable file
     file.go     update: the one way the file is written; create: a new one
     cli.go      the agent commands
-    mcp.go      `kban mcp`: grill's ask and report tools for an agent session, relayed to the hub
-    grill.go    grill questions: held asks, answers, acks, images, reports, /s/{session}
+    mcp.go      `kban mcp`: the ask and report tools for an agent session, relayed to the hub
+    session.go  questions: held asks, answers, acks, images, reports, /s/{session}
     push.go     the phone push through ntfy.sh, sent from the poll loop
     main.go     flags, serving or joining the hub on the port, browser opening
     ui/         embedded (go:embed) and served as is; app.js is built, never edited
     web/src/    the UI source: store.js (state, saving, keys, drag), view.jsx
                 (Preact components), md.js (Markdown for notes and comments),
-                blocks.jsx (a session's grill page), diagram.js (Mermaid)
+                blocks.jsx (a session's page), diagram.js (Mermaid)
 
 ## Rules that break things when ignored
 
@@ -69,7 +69,7 @@ person and the agents working alongside them.
 - Changes to the file are picked up by polling, within 500ms, and pushed
   over `/api/b/{id}/events` and `/api/s/{session}/events`, with the board
   list as a named `boards` event and the open questions and each session's
-  newest report line as `grill`; a `/s/{session}` stream's `grill` also
+  newest report line as `sessions`; a `/s/{session}` stream's `sessions` also
   carries that session's reports.
   The sidebar is painted only by those events and when the tab shows again,
   never by render(). The page reopens its stream itself after any error
@@ -80,7 +80,7 @@ person and the agents working alongside them.
   lands while you type without moving your caret. Every
   text field Preact owns is a `Field` (view.jsx), which goes uncontrolled
   while focused; always pass its `value`.
-- **File text, grill questions and reports become markup only through `md()`,
+- **File text, questions and reports become markup only through `md()`,
   `mdInline()` and `diagram()`;** everything else is JSX text. `Md` (view.jsx)
   renders `md()` and, off the card face, hands each mermaid fence to `diagram()`. `md()`
   escapes HTML, renders an image as a link, and shows a link to anything
@@ -94,7 +94,7 @@ person and the agents working alongside them.
   each bundle's inputs the way build.js does (app.js: web/src and the build
   files; mermaid.js: the build files alone) and fails when ui/app.js or
   ui/mermaid.js is stale or hand-edited, so `go install` never needs bun.
-- **A grill question lives as long as its relay's held request.** The hub
+- **A question lives as long as its relay's held request.** The hub
   keeps no question past it: a terminal cancel, a relay that died and a hub
   restart all end the request, and so the question.
 
@@ -113,8 +113,8 @@ stepping, comments landing while you type, undo, the broken-file banner,
 the stream reopening after the browser gives up on it or the board fails
 to load, a save that never landed, the hub's sidebar (a second kban joining,
 the change dot, a rename that lands before the switch), the notes
-swap, Markdown, one drag across columns, and grill questions (`grill`,
-`grill2`: answering, Ask and the lean, words kept when a question closes,
+swap, Markdown, one drag across columns, and questions (`ask`,
+`ask2`: answering, Ask and the lean, words kept when a question closes,
 hostile text and Mermaid, two relays of one session), and reports (`report`:
 a session's page and dot, diagrams in notes and comments, hostile Mermaid). It covers no drag
 within a column and no column drag: after touching the UI, do those by

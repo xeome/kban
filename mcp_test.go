@@ -186,7 +186,7 @@ func TestRelayWithoutAHub(t *testing.T) {
 }
 
 func TestRelayWhenTheHubDiesMidQuestion(t *testing.T) {
-	g := startGrill(t)
+	g := startSessions(t)
 	r := g.relay("s")
 	id := r.ask(question())
 	g.token("s", "D7")

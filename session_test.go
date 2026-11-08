@@ -19,9 +19,6 @@ import (
 	"time"
 )
 
-// Grill's own server tests, ported: real relays (the test binary as `kban
-// mcp`) asking a real hub over HTTP.
-
 const ackWait = 300 * time.Millisecond
 
 var png1 = []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89" +
@@ -53,7 +50,7 @@ func hard(over ...any) map[string]any {
 
 func textBlock() map[string]any { return map[string]any{"kind": "text", "text": "x"} }
 
-type grillHub struct {
+type sessionHub struct {
 	t        *testing.T
 	h        *hub
 	ts, tail *httptest.Server
@@ -62,11 +59,11 @@ type grillHub struct {
 	opened   []string
 }
 
-func startGrill(t *testing.T, paths ...string) *grillHub {
+func startSessions(t *testing.T, paths ...string) *sessionHub {
 	t.Helper()
 	h, ts := startHub(t, paths...)
 	t.Cleanup(ts.CloseClientConnections) // before Close, which waits for held asks
-	g := &grillHub{t: t, h: h, ts: ts, dir: t.TempDir()}
+	g := &sessionHub{t: t, h: h, ts: ts, dir: t.TempDir()}
 	h.ackWait = ackWait
 	h.browse = func(u string) { g.mu.Lock(); g.opened = append(g.opened, u); g.mu.Unlock() }
 	h.push.locked = func() bool { return false }
@@ -76,11 +73,11 @@ func startGrill(t *testing.T, paths ...string) *grillHub {
 	return g
 }
 
-func (g *grillHub) relay(session string) *relayProc {
+func (g *sessionHub) relay(session string) *relayProc {
 	return startRelay(g.t, portOf(g.ts), session, g.dir)
 }
 
-func (g *grillHub) tabs() []string {
+func (g *sessionHub) tabs() []string {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return append([]string(nil), g.opened...)
@@ -91,14 +88,14 @@ type sittingView struct {
 	Answer            *answer
 }
 
-type gview struct {
+type sessionsEvent struct {
 	Open    []openLine
 	Reports []struct {
 		Session, Project string
 		Time             int64
 	}
 	Session struct {
-		Source    *gsource
+		Source    *source
 		Sitting   []sittingView
 		Questions []struct {
 			Token, Relay string
@@ -111,7 +108,7 @@ type gview struct {
 	}
 }
 
-func (g *grillHub) view(session string) gview {
+func (g *sessionHub) view(session string) sessionsEvent {
 	g.t.Helper()
 	r, err := http.Get(g.ts.URL + "/api/s/" + url.PathEscape(session) + "/events")
 	if err != nil {
@@ -122,23 +119,23 @@ func (g *grillHub) view(session string) gview {
 	for sc := bufio.NewScanner(r.Body); sc.Scan(); {
 		if v, ok := strings.CutPrefix(sc.Text(), "event: "); ok {
 			name = v
-		} else if v, ok := strings.CutPrefix(sc.Text(), "data: "); ok && name == "grill" {
-			var out gview
+		} else if v, ok := strings.CutPrefix(sc.Text(), "data: "); ok && name == "sessions" {
+			var out sessionsEvent
 			json.Unmarshal([]byte(v), &out)
 			return out
 		}
 	}
-	g.t.Fatal("the session stream ended before its grill event")
-	return gview{}
+	g.t.Fatal("the session stream ended before its sessions event")
+	return sessionsEvent{}
 }
 
-func (g *grillHub) last(session, id, status string) sittingView {
+func (g *sessionHub) last(session, id, status string) sittingView {
 	g.t.Helper()
 	return g.lastWithin(session, id, status, 2*time.Second)
 }
 
 // An ask travels through the relay, so it lands a moment after the call.
-func (g *grillHub) token(session, id string) string {
+func (g *sessionHub) token(session, id string) string {
 	g.t.Helper()
 	for end := time.Now().Add(3 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
 		for _, q := range g.view(session).Session.Questions {
@@ -169,7 +166,7 @@ func post(t *testing.T, u, ctype string, body []byte) (int, string) {
 	return r.StatusCode, string(out)
 }
 
-func (g *grillHub) answer(token string, body any) (int, string) {
+func (g *sessionHub) answer(token string, body any) (int, string) {
 	g.t.Helper()
 	data, ok := body.(string)
 	if !ok {
@@ -180,7 +177,7 @@ func (g *grillHub) answer(token string, body any) (int, string) {
 }
 
 func TestAnswerReachesTheModelVerbatim(t *testing.T) {
-	g := startGrill(t)
+	g := startSessions(t)
 	r := g.relay("s")
 	id := r.ask(question())
 	tok := g.token("s", "D7")
@@ -213,7 +210,7 @@ func TestAnswerReachesTheModelVerbatim(t *testing.T) {
 }
 
 func TestAnswerRules(t *testing.T) {
-	g := startGrill(t)
+	g := startSessions(t)
 	r := g.relay("s")
 
 	id := r.ask(hard())
@@ -263,7 +260,7 @@ func TestAnswerRules(t *testing.T) {
 }
 
 func TestOneOpenQuestionPerRelay(t *testing.T) {
-	g := startGrill(t)
+	g := startSessions(t)
 	r := g.relay("s")
 	first := r.ask(question("id", "D1"))
 	tok := g.token("s", "D1")
@@ -287,7 +284,7 @@ func TestOneOpenQuestionPerRelay(t *testing.T) {
 	}
 }
 
-func refused(t *testing.T, g *grillHub, r *relayProc, q map[string]any, path string) {
+func refused(t *testing.T, g *sessionHub, r *relayProc, q map[string]any, path string) {
 	t.Helper()
 	text, isErr := r.tool(r.ask(q))
 	if !isErr || !strings.Contains(text, path) {
@@ -298,7 +295,7 @@ func refused(t *testing.T, g *grillHub, r *relayProc, q map[string]any, path str
 	}
 }
 
-func accepted(t *testing.T, g *grillHub, r *relayProc, q map[string]any) {
+func accepted(t *testing.T, g *sessionHub, r *relayProc, q map[string]any) {
 	t.Helper()
 	id := r.ask(q)
 	if m := r.response(id, 300*time.Millisecond); m != nil {
@@ -311,7 +308,7 @@ func accepted(t *testing.T, g *grillHub, r *relayProc, q map[string]any) {
 }
 
 func TestMalformedQuestionsNameTheirPath(t *testing.T) {
-	g := startGrill(t)
+	g := startSessions(t)
 	r := g.relay("s")
 	img := filepath.Join(g.dir, "a.png")
 	os.WriteFile(img, png1, 0o644)
@@ -369,7 +366,7 @@ func TestMalformedQuestionsNameTheirPath(t *testing.T) {
 }
 
 func TestEachLimitIsExact(t *testing.T) {
-	g := startGrill(t)
+	g := startSessions(t)
 	r := g.relay("s")
 	n := func(k int, f func(i int) any) []any {
 		out := []any{}
@@ -409,7 +406,7 @@ func TestEachLimitIsExact(t *testing.T) {
 }
 
 func TestImagesAreServedByBlockPathWhileOpen(t *testing.T) {
-	g := startGrill(t)
+	g := startSessions(t)
 	r := g.relay("s")
 	png := filepath.Join(g.dir, "shot.png")
 	os.WriteFile(png, png1, 0o644)
@@ -459,21 +456,21 @@ func TestImagesAreServedByBlockPathWhileOpen(t *testing.T) {
 func TestATabOpensUnlessADesktopTabAcks(t *testing.T) {
 	for _, c := range []struct {
 		name   string
-		ack    func(g *grillHub, tok string) int
+		ack    func(g *sessionHub, tok string) int
 		opened int
 	}{
-		{"no tab", func(*grillHub, string) int { return 204 }, 1},
-		{"a desktop tab", func(g *grillHub, tok string) int {
+		{"no tab", func(*sessionHub, string) int { return 204 }, 1},
+		{"a desktop tab", func(g *sessionHub, tok string) int {
 			code, _ := post(t, g.ts.URL+"/api/q/"+tok+"/ack", "application/json", nil)
 			return code
 		}, 0},
-		{"a phone", func(g *grillHub, tok string) int {
+		{"a phone", func(g *sessionHub, tok string) int {
 			code, _ := post(t, g.tail.URL+"/api/q/"+tok+"/ack", "application/json", nil)
 			return code
 		}, 1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			g := startGrill(t)
+			g := startSessions(t)
 			r := g.relay("sess-1")
 			r.ask(question())
 			if code := c.ack(g, g.token("sess-1", "D7")); code != 204 && !(c.name == "a phone" && code == 404) {
@@ -492,7 +489,7 @@ func TestATabOpensUnlessADesktopTabAcks(t *testing.T) {
 }
 
 func TestThePhoneAnswersOnTheTailnetButNeverAsks(t *testing.T) {
-	g := startGrill(t)
+	g := startSessions(t)
 	r := g.relay("s")
 	id := r.ask(question())
 	tok := g.token("s", "D7")
@@ -509,11 +506,11 @@ func TestThePhoneAnswersOnTheTailnetButNeverAsks(t *testing.T) {
 		t.Errorf("answer = %+v", a)
 	}
 	ask, _ := json.Marshal(map[string]any{"relay": "r", "session": "s", "cwd": g.dir, "args": question()})
-	if code, _ := post(t, g.tail.URL+"/api/grill/ask", "application/json", ask); code != 404 {
+	if code, _ := post(t, g.tail.URL+"/api/ask", "application/json", ask); code != 404 {
 		t.Errorf("an ask on the tailnet listener: %d, want 404", code)
 	}
 	rep, _ := json.Marshal(map[string]any{"relay": "r", "session": "s", "cwd": g.dir, "text": "from the tailnet"})
-	if code, _ := post(t, g.tail.URL+"/api/grill/report", "application/json", rep); code != 404 {
+	if code, _ := post(t, g.tail.URL+"/api/report", "application/json", rep); code != 404 {
 		t.Errorf("a report on the tailnet listener: %d, want 404", code)
 	}
 	if reps := g.view("s").Session.Reports; len(reps) != 0 {
@@ -523,11 +520,11 @@ func TestThePhoneAnswersOnTheTailnetButNeverAsks(t *testing.T) {
 
 // A cross-site page can send a simple POST, with any of these types or none, without asking first.
 func TestAskAndReportTakeOnlyJSON(t *testing.T) {
-	g := startGrill(t)
+	g := startSessions(t)
 	body, _ := json.Marshal(map[string]any{"relay": "r", "session": "s", "cwd": g.dir, "args": question(), "text": "a report"})
 	for _, route := range []string{"ask", "report"} {
 		for _, ct := range []string{"", "text/plain", "application/x-www-form-urlencoded", "multipart/form-data; boundary=x"} {
-			if code, _ := post(t, g.ts.URL+"/api/grill/"+route, ct, body); code != http.StatusUnsupportedMediaType {
+			if code, _ := post(t, g.ts.URL+"/api/"+route, ct, body); code != http.StatusUnsupportedMediaType {
 				t.Errorf("%s sent as %q: %d, want 415", route, ct, code)
 			}
 		}
@@ -539,7 +536,7 @@ func TestAskAndReportTakeOnlyJSON(t *testing.T) {
 
 func TestAReportReturnsAtOnceAndReachesItsSessionOnly(t *testing.T) {
 	board := newBoardFile(t, t.TempDir(), "TODO.json", "A")
-	g := startGrill(t, board)
+	g := startSessions(t, board)
 	events := listen(t, g.ts.URL+"/api/b/"+fileID(board)+"/events")
 	r := g.relay("s")
 	text := "## Done\n\n```mermaid\nflowchart LR\n  A --> B\n```"
@@ -558,14 +555,14 @@ func TestAReportReturnsAtOnceAndReachesItsSessionOnly(t *testing.T) {
 	}
 	for {
 		e := next(t, events)
-		var v gview
+		var v sessionsEvent
 		json.Unmarshal([]byte(e.data), &v)
-		if e.name != "grill" || len(v.Reports) == 0 {
+		if e.name != "sessions" || len(v.Reports) == 0 {
 			continue
 		}
 		if strings.Contains(e.data, "flowchart") || len(v.Reports) != 1 || v.Reports[0].Session != "s" ||
 			v.Reports[0].Project != filepath.Base(g.dir) || v.Reports[0].Time != reps[0].Time {
-			t.Errorf("the board stream's grill event: %s, want session s, its project and time, and no text", e.data)
+			t.Errorf("the board stream's sessions event: %s, want session s, its project and time, and no text", e.data)
 		}
 		break
 	}
@@ -585,16 +582,16 @@ func TestAReportReturnsAtOnceAndReachesItsSessionOnly(t *testing.T) {
 	}
 }
 
-func (g *grillHub) report(session, text string) {
+func (g *sessionHub) report(session, text string) {
 	g.t.Helper()
 	body, _ := json.Marshal(map[string]any{"relay": "r", "session": session, "cwd": g.dir, "text": text})
-	if code, out := post(g.t, g.ts.URL+"/api/grill/report", "application/json", body); code != 200 {
+	if code, out := post(g.t, g.ts.URL+"/api/report", "application/json", body); code != 200 {
 		g.t.Fatalf("report %q: %d %s", text, code, out)
 	}
 }
 
 func TestTheHubKeepsTheNewest50Reports(t *testing.T) {
-	g := startGrill(t)
+	g := startSessions(t)
 	g.report("a", "r0")
 	for i := 1; i <= 50; i++ {
 		g.report("b", fmt.Sprint("r", i))
@@ -626,21 +623,20 @@ func TestTheSessionNamesItsProjectBranchAndTask(t *testing.T) {
 	}
 	plain := filepath.Join(root, "plain-dir")
 	os.MkdirAll(plain, 0o755)
-	// A git worktree: its .git is a file naming the repository's.
 	worktree := filepath.Join(root, "wt-1")
 	os.MkdirAll(worktree, 0o755)
 	os.WriteFile(filepath.Join(worktree, ".git"), []byte("gitdir: "+filepath.Join(repo, ".git", "worktrees", "wt-1")+"\n"), 0o644)
-	g := startGrill(t)
+	g := startSessions(t)
 	for _, c := range []struct{ cwd, project, branch string }{
 		{filepath.Join(repo, "sub"), "projx", "feat-y"}, {plain, "plain-dir", ""}, {worktree, "projx", ""},
 	} {
 		session := filepath.Base(c.cwd)
 		r := startRelay(t, portOf(g.ts), session, c.cwd)
-		id := r.ask(question("task", "grill header"))
+		id := r.ask(question("task", "sidebar redesign"))
 		g.answer(g.token(session, "D7"), map[string]any{"kind": "defer"})
 		r.answerOf(id)
 		src := g.view(session).Session.Source
-		if src == nil || src.Project != c.project || src.Branch != c.branch || src.Task != "grill header" || !strings.HasSuffix(src.Path, filepath.Base(c.cwd)) {
+		if src == nil || src.Project != c.project || src.Branch != c.branch || src.Task != "sidebar redesign" || !strings.HasSuffix(src.Path, filepath.Base(c.cwd)) {
 			t.Errorf("source from %s = %+v, want %s on %q, and the task outliving its question", c.cwd, src, c.project, c.branch)
 		}
 	}
@@ -648,7 +644,7 @@ func TestTheSessionNamesItsProjectBranchAndTask(t *testing.T) {
 
 // Fails on a hub with one question slot for everyone.
 func TestTwoSessionsAskAtOnce(t *testing.T) {
-	g := startGrill(t)
+	g := startSessions(t)
 	a, b := g.relay("sa"), g.relay("sb")
 	ida, idb := a.ask(question("id", "A1")), b.ask(question("id", "B1"))
 	g.token("sa", "A1")
@@ -670,7 +666,7 @@ func TestTwoSessionsAskAtOnce(t *testing.T) {
 }
 
 func TestOneSessionTwoRelays(t *testing.T) {
-	g := startGrill(t)
+	g := startSessions(t)
 	a, b := g.relay("s"), g.relay("s")
 	ida, idb := a.ask(question("id", "A1")), b.ask(question("id", "B1"))
 	tokA, tokB := g.token("s", "A1"), g.token("s", "B1")
@@ -685,7 +681,7 @@ func TestOneSessionTwoRelays(t *testing.T) {
 }
 
 func TestKillingOneRelayOfASessionLeavesTheOther(t *testing.T) {
-	g := startGrill(t)
+	g := startSessions(t)
 	a, b := g.relay("s"), g.relay("s")
 	a.ask(question("id", "A1"))
 	idb := b.ask(question("id", "B1"))
@@ -708,7 +704,7 @@ func TestKillingOneRelayOfASessionLeavesTheOther(t *testing.T) {
 // on. A body read by a json.Decoder stops before the trailing newline, so
 // the server would never notice the hang-up.
 func TestAHangUpCancelsTheQuestion(t *testing.T) {
-	g := startGrill(t)
+	g := startSessions(t)
 	// Its own server: one that missed a hang-up holds the ask for good, and closing it would wait for that.
 	srv := httptest.NewServer(g.h.handler())
 	t.Cleanup(func() {
@@ -734,7 +730,7 @@ func TestAHangUpCancelsTheQuestion(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		fmt.Fprintf(conn, "POST /api/grill/ask HTTP/1.1\r\nHost: %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s",
+		fmt.Fprintf(conn, "POST /api/ask HTTP/1.1\r\nHost: %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s",
 			srv.Listener.Addr(), len(body), body)
 		g.token("s", relay)
 		conn.Close()
@@ -744,7 +740,7 @@ func TestAHangUpCancelsTheQuestion(t *testing.T) {
 	}
 }
 
-func (g *grillHub) lastWithin(session, id, status string, d time.Duration) sittingView {
+func (g *sessionHub) lastWithin(session, id, status string, d time.Duration) sittingView {
 	var e sittingView
 	for end := time.Now().Add(d); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
 		for _, s := range g.view(session).Session.Sitting {

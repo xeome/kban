@@ -4,7 +4,7 @@ import { diagram } from './diagram.js';
 import { md, mdInline } from './md.js';
 import { Field, Reports } from './view.jsx';
 
-// A grill question is an agent's text: every string reaches markup only
+// A question is an agent's text: every string reaches markup only
 // through md() (text blocks) or mdInline() (one-line fields and cells).
 // Code and diffs are JSX text.
 export const Inline = ({ src, tag: Tag = 'span', ...props }) => <Tag {...props} dangerouslySetInnerHTML={{ __html: mdInline(src) }} />;

@@ -59,7 +59,7 @@ func main() {
 	noOpen := flag.Bool("no-open", false, "do not open a browser")
 	detached := flag.Bool("d", false, "run the hub in the background; with no file, start it alone")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: kban [flags] [board.json]\n       kban show|add|move|set|comment|init [-f board.json] ...\n       kban mcp [-p port]   grill's ask tool for an agent session, answered in the hub\n\n"+
+		fmt.Fprintf(os.Stderr, "usage: kban [flags] [board.json]\n       kban show|add|move|set|comment|init [-f board.json] ...\n       kban mcp [-p port]   the ask and report tools for an agent session, answered in the hub\n\n"+
 			"A board is a JSON file of columns and cards. Default file: TODO.json\n"+
 			"One kban serves every board listed in ~/.config/kban/boards; kban board.json adds it there.\n\n")
 		flag.PrintDefaults()

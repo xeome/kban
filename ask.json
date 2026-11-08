@@ -8,7 +8,7 @@
     "task": {
       "type": "string",
       "maxLength": 60,
-      "description": "The work this sitting serves, in 2 to 6 words, e.g. grill header redesign. Same on every question of the sitting. The page shows it beside the project, so parallel sessions stay apart."
+      "description": "The work this sitting serves, in 2 to 6 words, e.g. sidebar redesign. Same on every question of the sitting. The page shows it beside the project, so parallel sessions stay apart."
     },
     "n": {
       "type": "integer",
