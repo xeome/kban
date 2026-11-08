@@ -42,7 +42,7 @@ function join(file, port, e = env) {
   return { ok: k.status === 0, url: k.stdout.trim().split('\n').at(-1), id: k.stdout.trim().split('/').at(-1) };
 }
 const kban = (...args) => spawnSync(bin, args, { encoding: 'utf8' }).status === 0;
-const entry = (id) => `#side .item[data-id="${id}"]`;
+const entry = (id) => `#tabs .tab[data-id="${id}"]`;
 const dot = (id) => `!!document.querySelector('${entry(id)} .dot')`;
 
 const chrome = spawn('chromium', ['--headless=new', '--remote-debugging-port=9339', `--user-data-dir=${dir}/profile`,
@@ -507,8 +507,8 @@ if (run('hub')) {
   await p.until(`!!document.querySelector('${entry(idA)}')`);
   await sleep(1100); // past two polls, so the list names A's version after the rename
   check('the board left right after its own save has no dot', !await p.ev(dot(idA)));
-  check('the board clicked has lost its dot, and the header names its project and file',
-    await p.until(`!!document.querySelector('${entry(b.id)}') && !${dot(b.id)}`) >= 0 && await p.ev(`document.querySelector('#file').textContent`) === `${path.basename(dir)} / other.json`,
+  check('the board clicked has lost its dot, and the header names its project',
+    await p.until(`!!document.querySelector('${entry(b.id)}') && !${dot(b.id)}`) >= 0 && await p.ev(`document.querySelector('#file').textContent`) === path.basename(dir),
     await p.ev(`document.querySelector('#file').textContent + ' dot=' + ${dot(b.id)}`));
 }
 
@@ -644,8 +644,8 @@ if (run('drag')) {
 }
 
 // --- ask: an agent session's question, answered in the hub ---------------------
-function relay(port, session) {
-  const p = spawn(bin, ['mcp', '-p', String(port)], { env: { ...env, CLAUDE_CODE_SESSION_ID: session }, cwd: dir, stdio: ['pipe', 'pipe', 'inherit'] });
+function relay(port, session, cwd = dir) {
+  const p = spawn(bin, ['mcp', '-p', String(port)], { env: { ...env, CLAUDE_CODE_SESSION_ID: session }, cwd, stdio: ['pipe', 'pipe', 'inherit'] });
   procs.push(p);
   const got = new Map();
   let buf = '';
@@ -710,8 +710,8 @@ if (run('ask')) {
   await sleep(300);
   const r = relay(port, 'sess-1');
   let rid = r.ask(every);
-  const badge = await board.until(`!!document.querySelector('#side a.item.ask[href="/s/sess-1"] .badge')`, 3000);
-  const project = await board.ev(`[...document.querySelectorAll('#side .group')].find((g) => g.querySelector('a.item.ask'))?.querySelector('.head').textContent`);
+  const badge = await board.until(`!!document.querySelector('#side .item .badge')`, 3000);
+  const project = await board.ev(`[...document.querySelectorAll('#side .item')].find((r) => r.querySelector('.badge'))?.querySelector('.label').textContent`);
   await sleep(4000);
   check('a question reaches a hidden board tab\'s sidebar under its project, with a badge, and no tab opens after 4s',
     await board.ev('document.visibilityState') === 'hidden' && badge >= 0 && project === path.basename(dir) && !tabsOpened().some((u) => u.includes('/s/')),
@@ -731,9 +731,10 @@ if (run('ask')) {
     if (!document.querySelector('[data-path="context[0]"] li strong')) out.push('context[0] markdown');
     return out; })()`);
   check('every block kind renders, Markdown in text, "-" in a cell as text', missing.length === 0, JSON.stringify(missing));
-  check('the header names the task, project and the page is the session\'s',
-    await p.ev(`document.querySelector('#file').textContent`) === `session store · ${path.basename(dir)}` && (await p.ev('document.title')).startsWith('● session store'),
-    await p.ev(`document.querySelector('#file').textContent + ' | ' + document.title`));
+  check('the header names the project, the heading the task, and the page is the session\'s',
+    await p.ev(`document.querySelector('#file').textContent`) === path.basename(dir) && await p.ev(`document.querySelector('#sess .who h2')?.textContent`) === 'session store'
+      && (await p.ev('document.title')).startsWith('● session store'),
+    await p.ev(`document.querySelector('#file').textContent + ' | ' + document.querySelector('#sess .who h2')?.textContent + ' | ' + document.title`));
 
   await sleep(1000);
   const moved = await p.ev(STILL);
@@ -927,30 +928,32 @@ if (run('report')) {
   const sp = await tab(`${base}/s/rep-1`);
   await sp.ev('window.__loaded = 1');
   await bp.send('Page.bringToFront');
-  const row = '#side a.item.report[data-session="rep-1"]';
+  const row = '#list .item[data-session="rep-1"]';
   const dotted = `!!document.querySelector('${row} .dot')`;
+  const projectRow = `#side .item[data-project="${path.basename(dir)}"]`;
+  const projectDotted = `!!document.querySelector('${projectRow} .dot')`;
   const r = relay(port, 'rep-1');
   r.report('## First\n\n```mermaid\nflowchart LR\n  A --> B\n```');
   const drawn = await sp.until(`!!document.querySelector('.reports article svg')`, 20000) >= 0;
   const hidden = await sp.ev(`document.visibilityState === 'hidden' && window.__loaded === 1`);
-  check('a first report reaches the hidden session tab without a reload, its diagram an SVG, and dots its session on the board tab and its own',
-    drawn && hidden && await bp.until(dotted) >= 0 && await sp.ev(dotted), `drawn=${drawn} hidden=${hidden} board=${await bp.ev(dotted)} own=${await sp.ev(dotted)}`);
-  const under = await bp.ev(`document.querySelector('${row}')?.closest('.group').querySelector('.head').textContent`);
-  check('a session that reports with no open question gets its own sidebar row under its project', under === path.basename(dir), under);
+  check('a first report reaches the hidden session tab without a reload, its diagram an SVG, and dots its project on the board tab and its Sessions row on its own',
+    drawn && hidden && await bp.until(projectDotted) >= 0 && await sp.ev(dotted), `drawn=${drawn} hidden=${hidden} board=${await bp.ev(projectDotted)} own=${await sp.ev(dotted)}`);
+  const under = await sp.ev(`document.querySelector('${row}') && document.querySelector('#side .item[aria-current="page"]')?.dataset.project`);
+  check('a session that reports with no open question gets its own row in its project\'s Sessions list', under === path.basename(dir), under);
 
   await sp.send('Page.bringToFront');
   const cleared = await sp.until(`document.visibilityState === 'visible' && !!document.querySelector('${row}') && !${dotted}`) >= 0;
   await bp.send('Page.bringToFront');
-  const boardCleared = await bp.until(`document.visibilityState === 'visible' && !${dotted}`) >= 0;
+  const boardCleared = await bp.until(`document.visibilityState === 'visible' && !${projectDotted}`) >= 0;
   await bp.send('Page.reload');
-  const reloaded = await bp.until(`!!document.querySelector('${row}')`, 5000) >= 0 && !await bp.ev(dotted);
-  check('showing the session page clears the dot, on its tab and on the board tab, and a reload keeps it clear',
+  const reloaded = await bp.until(`!!document.querySelector('${projectRow}')`, 5000) >= 0 && !await bp.ev(projectDotted);
+  check('showing the session page clears the dot, on its tab and on the board tab\'s project row, and a reload keeps it clear',
     cleared && boardCleared && reloaded, `cleared=${cleared} board=${boardCleared} reloaded=${reloaded}`);
 
   const t1 = await sp.ev(`document.querySelector('.reports article').dataset.time`);
   await sp.ev(`document.querySelector('.reports article svg').__mark = 1`);
   r.report('## Second\n\n```mermaid\nflowchart LR\n  C --> D\n```');
-  const back = await bp.until(dotted, 5000) >= 0;
+  const back = await bp.until(projectDotted, 5000) >= 0;
   const both = await sp.until(`document.querySelectorAll('.reports article svg').length === 2`, 20000) >= 0;
   const kept = await sp.ev(`document.querySelector('.reports article[data-time="${t1}"] svg')?.__mark === 1 && document.querySelector('.reports article').dataset.time !== '${t1}'`);
   check('a newer report with the session page hidden dots it again, lands above the first, and the first\'s diagram is the same node',
@@ -1003,8 +1006,104 @@ if (run('report')) {
     drawnSize && replaced && redrawn, `${drawnSize} -> ${await bp.ev(size)} replaced=${replaced}`);
 }
 
+// --- the sidebar lists projects; a project opens on a tab bar -----------------
+if (run('projects')) {
+  const port = 4325;
+  const base = `http://127.0.0.1:${port}`;
+  const root = fs.mkdtempSync(path.join(dir, 'projects-'));
+  const penv = { ...env, XDG_CONFIG_HOME: root };
+  const [P, Q, R] = ['app', 'site', 'tools'].map((d) => path.join(root, d));
+  for (const d of [P, Q, R]) fs.mkdirSync(d);
+  spawnSync('git', ['init', '-q', '-b', 'main', P]);
+  const [fA, fB, fC] = [path.join(P, 'A.json'), path.join(P, 'B.json'), path.join(Q, 'C.json')];
+  for (const f of [fA, fB, fC]) fs.writeFileSync(f, JSON.stringify(board(['x']), null, 2));
+  const C = (await server(fC, port, false, penv)).split('/').at(-1);
+  const A = join(fA, port, penv).id;
+  const B = join(fB, port, penv).id;
+  const row = (name) => `#side .item[data-project="${name}"]`;
+  const tabOf = (id) => `#tabs .tab[data-id="${id}"]`;
+  const sessTab = '#tabs .tab[data-tab="sessions"]';
+  const item = (s) => `#list .item[data-session="${s}"]`;
+  const lit = (sel) => `!!document.querySelector('${sel} .dot')`;
+  const badge = (name) => `document.querySelector('${row(name)} .badge')?.textContent`;
+
+  // Each report is shown once, so it starts read: a dot below is news.
+  const [r1, r2, rt] = [relay(port, 'r1', P), relay(port, 'r2', P), relay(port, 'rt', R)];
+  r1.report('First report');
+  const p = await tab(`${base}/s/r1`);
+  const nav = async (u) => { await p.send('Page.navigate', { url: base + u }); await p.until(`location.pathname === '${u}' && document.readyState === 'complete'`); };
+  await p.until(`!!document.querySelector('.reports article')`);
+  r2.report('\n## Second report\n\nmore');
+  await nav('/s/r2');
+  await p.until(`!!document.querySelector('.reports article')`);
+  rt.report('tools report');
+  await nav(`/b/${C}`);
+  const at = async (sel, u) => await p.click(sel) && await p.until(`location.pathname === '${u}' && document.readyState === 'complete' && !!document.querySelector('${row('app')}')`, 5000) >= 0;
+
+  const rows = await p.until(`document.querySelectorAll('#groups > *').length === 3`) >= 0
+    && await p.ev(`[...document.querySelectorAll('#groups > *')].map((e) => e.matches('.item[data-project]') ? e.dataset.project : 'not a project row: ' + e.className).sort().join()`);
+  check('the sidebar holds project rows only', rows === 'app,site,tools', rows);
+  const tabs = `[...document.querySelectorAll('#tabs .tab')].map((t) => (t.dataset.id ? t.querySelector('.file').textContent : t.textContent) + (t.getAttribute('aria-current') === 'page' ? '*' : '')).join()`;
+  check('a board-only project has no Sessions tab, and /b/{id} selects its tab', await p.ev(tabs) === 'C.json*', await p.ev(tabs));
+
+  check('a project with no board opens its first session', await at(row('tools'), '/s/rt'), await p.ev('location.pathname'));
+  await at(row('app'), `/b/${A}`);
+  await at(tabOf(B), `/b/${B}`);
+  check('/b/{id} selects its board\'s tab', await p.ev(tabs) === 'A.json,B.json*,Sessions', await p.ev(tabs));
+  await at(row('site'), `/b/${C}`);
+  check('a project opens on the tab last open in it, before its first board', await at(row('app'), `/b/${B}`), await p.ev('location.pathname'));
+
+  const rw = relay(port, 'w', P);
+  const askW = rw.ask(small('W1', ['Yes', 'No']));
+  await at(row('site'), `/b/${C}`);
+  await p.until(`${badge('app')} === '?'`);
+  check('a project opens on a waiting question, before the tab last open in it', await at(row('app'), '/s/w'), await p.ev('location.pathname'));
+  check('a click opens the project with its board tabs and one Sessions tab, which /s/{session} selects',
+    await p.ev(tabs) === 'A.json,B.json,Sessions?*', await p.ev(tabs));
+  const list = await p.ev(`JSON.stringify([...document.querySelectorAll('#list .item')].map((e) => [e.dataset.session, e.querySelector('.label').textContent, e.querySelector('small').textContent]))`);
+  const [w, s2, s1] = JSON.parse(list);
+  check('the list puts the waiting session first, then the newest report; each row reads its task or first line, then time and branch',
+    w?.join() === 'w,questions in the hub,main' && s2?.[0] === 'r2' && s2[1] === 'Second report' && / · main$/.test(s2[2]) && s2[2] !== ' · main'
+      && s1?.slice(0, 2).join() === 'r1,First report' && JSON.parse(list).length === 3, list);
+  check('the Sessions tab links to the list\'s first row',
+    await p.ev(`!!document.querySelector('${sessTab}') && document.querySelector('${sessTab}').getAttribute('href') === document.querySelector('#list .item')?.getAttribute('href')`));
+
+  const rw2 = relay(port, 'w2', P);
+  const askW2 = rw2.ask(small('W2', ['Yes', 'No']));
+  check('a second question in the project turns its ? into ?2', await p.until(`${badge('app')} === '?2'`) >= 0, await p.ev(badge('app')));
+  rw.cancel(askW);
+  await p.until(`${badge('app')} === '?'`);
+
+  await at(row('site'), `/b/${C}`);
+  kban('add', '-f', fA, 'Todo', 'agent on A');
+  const rowLit = await p.until(lit(row('app'))) >= 0;
+  await at(row('app'), '/s/w2');
+  const tabLit = await p.until(lit(tabOf(A))) >= 0 && await p.ev(lit(row('app')));
+  await at(tabOf(A), `/b/${A}`);
+  const cleared = await p.until(`!${lit(tabOf(A))} && !${lit(row('app'))}`) >= 0;
+  check('an agent\'s edit to a board in another project lights its project row and its tab, and showing the board clears both',
+    rowLit && tabLit && cleared, `row=${rowLit} tab=${tabLit} cleared=${cleared}`);
+
+  r1.report('Third report');
+  const news = await p.until(`${lit(row('app'))} && ${lit(sessTab)}`) >= 0;
+  await at(sessTab, '/s/w2');
+  const listed = await p.until(`${lit(item('r1'))} && ${lit(sessTab)} && ${lit(row('app'))}`) >= 0;
+  await at(item('r1'), '/s/r1');
+  const read = await p.until(`!${lit(item('r1'))} && !${lit(sessTab)} && !${lit(row('app'))}`) >= 0;
+  check('a new report lights the project row, the Sessions tab and its row, and showing the session clears them',
+    news && listed && read, `news=${news} listed=${listed} read=${read}`);
+
+  await at(tabOf(B), `/b/${B}`);
+  rw2.cancel(askW2);
+  await at(row('site'), `/b/${C}`);
+  fs.writeFileSync(path.join(root, 'kban', 'boards'), [fC, fA].join('\n') + '\n');
+  await p.until(`fetch('/api/b/${B}/board').then((r) => r.status === 404)`);
+  await p.until(`!document.querySelector('${row('app')} .badge')`);
+  check('a project whose last tab is no longer listed opens its first board', await at(row('app'), `/b/${A}`), await p.ev('location.pathname'));
+}
+
 // --- pushes: only what the owner was not shown --------------------------------
-// Each "none" row asks a control question whose sidebar row is hidden, so
+// Each "none" row asks a control question whose project row is hidden, so
 // no tab shows it, and asserts only once the control's push has arrived.
 if (run('push')) {
   const port = 4322;
@@ -1029,28 +1128,31 @@ if (run('push')) {
   const tail = `http://127.0.0.2:${port}`;
   const posted = (l) => posts.filter((x) => x.click === l).length;
   const arrives = async (l, ms = 8000) => { for (const t0 = Date.now(); Date.now() - t0 < ms; await sleep(50)) if (posted(l)) return true; return false; };
-  // Its session sorts after every push-N, so its row is a new element, not
-  // a shown row Preact reuses and the tab already counts as seen. It comes
-  // due up to a tick after the item it controls, and both may post at once,
-  // so pushed() waits a tick more before a row reads posted().
+  // Each control asks from its own directory, so its project row is a new
+  // element, not the questions' shown row, which the tab already counts as
+  // seen. It comes due up to a tick after the item it controls, and both may
+  // post at once, so pushed() waits a tick more before a row reads posted().
   let n = 0;
   const control = () => {
     const i = ++n;
-    const r = relay(port, `unseen-${i}`);
+    const cwd = path.join(pdir, `unseen-${i}`);
+    fs.mkdirSync(cwd);
+    const r = relay(port, `unseen-${i}`, cwd);
     const ask = r.ask(small(`C${i}`, ['Yes', 'No']));
     return {
-      asked: () => p.until(`!!document.querySelector('#side .item.ask[href="/s/unseen-${i}"]')`),
+      asked: () => p.until(`!!document.querySelector('#side .item[data-project="unseen-${i}"]')?.dataset.tokens`),
       pushed: async () => { const got = await arrives(`${tail}/s/unseen-${i}`, 10000); await sleep(600); r.cancel(ask); return got; },
     };
   };
   const p = await tab(url);
   await p.send('Emulation.setFocusEmulationEnabled', { enabled: true });
-  await p.ev(`document.head.insertAdjacentHTML('beforeend', '<style>#side .item.ask[href^="/s/unseen-"] { display: none }</style>')`);
+  await p.ev(`document.head.insertAdjacentHTML('beforeend', '<style>#side .item[data-project^="unseen-"] { display: none }</style>')`);
+  // Every push-N asks from dir, one project, so its row holds them all.
   const asks = [];
   const question = async (i) => {
     const r = relay(port, `push-${i}`);
     asks.push([r, r.ask(small(`P${i}`, ['Yes', 'No']))]);
-    return await p.until(`!!document.querySelector('#side .item.ask[href="/s/push-${i}"]')`) >= 0;
+    return await p.until(`document.querySelector('#side .item[data-project="${path.basename(dir)}"]')?.dataset.tokens.split(' ').length === ${i}`) >= 0;
   };
   const link = (i) => `${tail}/s/push-${i}`;
   const clicks = () => JSON.stringify(posts.map((q) => q.click));
@@ -1091,6 +1193,10 @@ if (run('push')) {
   await question(7);
   check('the card modal open over the sidebar: a push', modal && await arrives(link(7)), `modal=${modal} ${clicks()}`);
   await p.ev(`document.querySelector('#card').close()`);
+  await question(8);
+  c = control();
+  await c.asked();
+  check('a second question in a project whose row is on screen: no push', await c.pushed() && !posted(link(8)), clicks());
   for (const [r, ask] of asks) r.cancel(ask);
 
   const once = posts.map((q) => q.click).filter((c, i, all) => all.indexOf(c) !== i);
@@ -1113,14 +1219,15 @@ if (run('fold')) {
   const b = join(other, port, fenv);
   const r = relay(port, 'fold-1');
   const ask = r.ask(small('F1', ['Yes', 'No']));
-  const asked = '#side .item.ask[href="/s/fold-1"]';
-  const ready = await p.until(`!!document.querySelector('${asked}') && !!document.querySelector('${entry(b.id)}')`) >= 0 && kban('add', '-f', other, 'Todo', 'agent on B');
-  check('fold setup: a question row and a board with a change dot', ready && await p.until(dot(b.id)) >= 0);
+  const asked = `#side .item[data-project="${path.basename(dir)}"]`;
+  const boards = `#side .item[data-project="${path.basename(fdir)}"]`;
+  const ready = await p.until(`!!document.querySelector('${asked} .badge') && !!document.querySelector('${entry(b.id)}')`) >= 0 && kban('add', '-f', other, 'Todo', 'agent on B');
+  check('fold setup: a project row with a question and one with a changed board', ready && await p.until(`!!document.querySelector('${boards} .dot')`) >= 0);
 
   const W = `document.querySelector('#side').getBoundingClientRect().width`;
   const is = async (w, open) => await p.until(`${W} === ${w} && document.querySelector('#fold')?.getAttribute('aria-expanded') === '${open}'`, 1000) >= 0; // past the slide
   const looks = (sel, prop) => `getComputedStyle(document.querySelector('${sel}'), '::after').${prop}`;
-  const label = `getComputedStyle(document.querySelector('${entry(b.id)} .label')).opacity`;
+  const label = `getComputedStyle(document.querySelector('${boards} .label')).opacity`;
   const state = () => p.ev(`${W} + 'px expanded=' + document.querySelector('#fold')?.getAttribute('aria-expanded') + ' label=' + ${label}`);
   const shoot = async (name) => fs.writeFileSync(path.join(process.env.SHOTS || dir, name), Buffer.from((await p.send('Page.captureScreenshot', { format: 'png' })).result.data, 'base64'));
   const bracket = async () => {
@@ -1128,7 +1235,7 @@ if (run('fold')) {
   };
 
   check('open by default: 200px, labels shown, the toggle says it collapses, no rail tooltip',
-    await is(200, true) && await p.ev(label) === '1' && await p.ev(looks(entry(b.id), 'content')) === 'none', await state());
+    await is(200, true) && await p.ev(label) === '1' && await p.ev(looks(boards, 'content')) === 'none', await state());
   await shoot('side-open-1440-dark.png');
 
   await p.click('#fold');
@@ -1142,16 +1249,16 @@ if (run('fold')) {
       && m.checkVisibility({ opacityProperty: true }) && m.contains(hit)) || JSON.stringify({ tile: [t.left, t.top, t.right], mark: [b.left, b.top, b.right], rail: s.right });
   })()`);
   let at = await onTile(asked, '.badge');
-  check('folded, the question\'s ? badge shows on its tile', at === true, at);
-  at = await onTile(entry(b.id), '.dot');
-  check('folded, the changed board\'s dot shows on its tile', at === true, at);
+  check('folded, the question\'s ? badge shows on its project\'s tile', at === true, at);
+  at = await onTile(boards, '.dot');
+  check('folded, the changed board\'s dot shows on its project\'s tile', at === true, at);
 
-  const [x, y] = await p.ev(`(() => { const t = document.querySelector('${entry(b.id)} .tile')?.getBoundingClientRect() || document.querySelector('${entry(b.id)}').getBoundingClientRect(); return [t.left + t.width / 2, t.top + t.height / 2]; })()`);
+  const [x, y] = await p.ev(`(() => { const t = document.querySelector('${boards} .tile')?.getBoundingClientRect() || document.querySelector('${boards}').getBoundingClientRect(); return [t.left + t.width / 2, t.top + t.height / 2]; })()`);
   await p.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
   await sleep(600); // past the tooltip's .3s delay
-  const tip = await p.ev(`${looks(entry(b.id), 'content')} + ' opacity=' + ${looks(entry(b.id), 'opacity')}`);
+  const tip = await p.ev(`${looks(boards, 'content')} + ' opacity=' + ${looks(boards, 'opacity')}`);
   // The alt text after / keeps the tooltip out of the row's accessible name.
-  check('folded, hovering a board\'s tile shows a tooltip naming its project and file', tip === `"${path.basename(fdir)} / other.json" / "" opacity=1`, tip);
+  check('folded, hovering a project\'s tile shows a tooltip naming the project', tip === `"${path.basename(fdir)}" / "" opacity=1`, tip);
   await shoot('side-rail-1440-dark.png');
   await p.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 700, y: 400 });
 
@@ -1159,11 +1266,11 @@ if (run('fold')) {
   await p.ev(`window.__seen = []; const f1 = window.fetch; window.fetch = (u, o) => { if (u === '/api/seen') window.__seen.push(...JSON.parse(o.body).tokens); return f1(u, o); }`);
   const r2 = relay(port, 'fold-2');
   const ask2 = r2.ask(small('F2', ['Yes', 'No']));
-  const told = await p.until(`(() => { const t = document.querySelector('#side .item.ask[href="/s/fold-2"]')?.dataset.token; return !!t && window.__seen.includes(t); })()`) >= 0;
+  const told = await p.until(`(() => { const t = document.querySelector('${asked}')?.dataset.tokens.split(' '); return t?.length === 2 && t.every((x) => window.__seen.includes(x)); })()`) >= 0;
   check('folded, a question reaching the rail is posted to /api/seen, so the hub does not push it', told, await p.ev(`JSON.stringify(window.__seen) + ' ' + ${W}`));
 
   // The tooltip takes hits for the probe, so elementFromPoint finds it beside the rail.
-  await p.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 150, deviceScaleFactor: 1, mobile: false });
+  await p.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 100, deviceScaleFactor: 1, mobile: false });
   await sleep(300);
   const scrolls = await p.ev(`(() => { const s = document.querySelector('#side'), h = [s.scrollHeight, s.clientHeight]; s.scrollTop = s.scrollHeight;
     return (h[0] > h[1] && s.scrollTop > 0) || JSON.stringify({ scrollHeight: h[0], clientHeight: h[1], scrollTop: s.scrollTop }); })()`);

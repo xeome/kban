@@ -68,11 +68,14 @@ person and the agents working alongside them.
   board.
 - Changes to the file are picked up by polling, within 500ms, and pushed
   over `/api/b/{id}/events` and `/api/s/{session}/events`, with the board
-  list as a named `boards` event and the open questions and each session's
-  newest report line as `sessions`; a `/s/{session}` stream's `sessions` also
-  carries that session's reports.
-  The sidebar is painted only by those events and when the tab shows again,
-  never by render(). The page reopens its stream itself after any error
+  list as a named `boards` event and the open questions and one line per
+  session (task, branch, newest report time) as `sessions`; a `/s/{session}`
+  stream's `sessions` also carries each line's newest report's first line
+  and that session's reports. Each session keeps its newest 50 reports, the
+  hub at most 500.
+  The sidebar (one row per project), the project's tab bar and its Sessions
+  list are painted only by `side()`, on those events and when the tab shows
+  again, never by render(). The page reopens its stream itself after any error
   and loads the board on every open, because Firefox gives up on a silent
   stream after a network change.
 - **Render never touches a focused field.** The modal follows its card by
@@ -111,8 +114,10 @@ fails before it passes: break the line it covers, run it, put the line back.
 `web/e2e/check.mjs` drives the real binary in headless Chromium: opening,
 stepping, comments landing while you type, undo, the broken-file banner,
 the stream reopening after the browser gives up on it or the board fails
-to load, a save that never landed, the hub's sidebar (a second kban joining,
-the change dot, a rename that lands before the switch), the notes
+to load, a save that never landed, the hub's tabs (a second kban joining,
+the change dot, a rename that lands before the switch), the projects
+sidebar (`projects`: project rows, tabs, the Sessions list, where a click
+lands), the notes
 swap, Markdown, one drag across columns, and questions (`ask`,
 `ask2`: answering, Ask and the lean, words kept when a question closes,
 hostile text and Mermaid, two relays of one session), and reports (`report`:

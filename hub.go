@@ -23,7 +23,6 @@ type hub struct {
 	sent     []listed // the list as the streams were last told it
 
 	sessions    map[string]*session
-	reports     []report             // every session's, oldest first
 	questions   map[string]*asked    // by token
 	sessionSubs map[*stream]struct{} // /s/{session} pages' streams
 	tail        string               // the tailnet base URL, "" when off the tailnet
