@@ -18,6 +18,7 @@ Or from a clone, into `$(go env GOPATH)/bin`:
     kban -d [board.json]     # the same, with the hub in the background
 
 One kban, the hub, serves every board in one tab. A sidebar lists projects.
+In a window wider than 820px, `[` folds it to a rail and back.
 A project opens with a tab per board and a Sessions tab. A dot marks what
 changed since you last looked. `kban FILE`
 adds the file to `~/.config/kban/boards` (`$XDG_CONFIG_HOME/kban/boards`),
@@ -39,6 +40,44 @@ Agents change the board with these, never by editing the file:
 
 `TEXT` `-` reads stdin. Exit 1 is a usage or lookup error, 2 a file kban
 cannot read; neither writes the file.
+
+## Agent sessions
+
+`kban mcp` is an MCP server on stdio with two tools, `ask` and `report`, for
+an agent session such as Claude Code. Register it once:
+
+    claude mcp add -s user kban -- kban mcp     # kban mcp -p PORT for another port
+
+Each call goes to the hub on 127.0.0.1, so start one first: `kban -d`, or
+`kban` in a terminal. A session is listed in its project's Sessions tab. The
+project is named after the git repository `kban mcp` starts in, the main one
+for a worktree, or after its folder outside a repository. A session's page
+is `/s/{session}`.
+
+- `ask` puts one decision to you on the session's page and waits. Pick an
+  option, defer, answer in your own words, or send it back with Ask. If no
+  kban page on 127.0.0.1 or localhost receives the question within 3
+  seconds, the hub opens the session's page, unless it runs with
+  `-no-open`. A question lives as long as the agent's call: cancel the call
+  in the terminal, or stop the hub, and the question closes.
+- `report` shows Markdown on the session's page and returns its URL at
+  once. The hub keeps each session's newest 50 reports, and at most 500 in
+  all, in memory. So a restart clears them.
+
+The hub can also push a question to your phone through ntfy.sh. It does when
+it listens on the tailnet and `~/.config/claude-notify/topic` holds an
+ntfy.sh topic. A question is pushed once after 5 minutes, unless a focused
+kban tab has had its project on screen by then. The push links to the
+session's page on the tailnet address, where you can answer it. One
+answered or cancelled before then is not pushed. A question asked while
+hyprlock runs is pushed at once.
+
+## Markdown
+
+Notes, comments and reports are Markdown. HTML shows as text, an image as a
+link, and only http(s) and mailto links are live. A fenced block marked
+`mermaid` draws as a diagram in notes, comments and reports, but not on the
+card face.
 
 ## The file
 
