@@ -7,7 +7,7 @@ person and the agents working alongside them.
 
 ## Commands
 
-    go test ./...          # everything; ~1s, no bun needed
+    go test ./...          # everything; ~20s, no bun needed
     go run . board.json    # register a board and open it on the hub (-p port, -no-open, -d)
     go run . show -f board.json   # the agent commands: show, add, move, set, comment, init
 
