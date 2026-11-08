@@ -102,7 +102,7 @@ func run(path string, port int, browse, detached bool) error {
 	fmt.Println(url)
 	if ln != nil && detached {
 		ln.Close()
-		pid, err := detach(port)
+		pid, err := detach(port, browse)
 		if err != nil {
 			return err
 		}
@@ -145,8 +145,13 @@ func hubAt(base string) bool {
 	return r.StatusCode == 200 && json.NewDecoder(r.Body).Decode(&list) == nil
 }
 
-func detach(port int) (int, error) {
-	p, err := startDetached(port)
+// detach starts the hub with every hub flag this kban was given.
+func detach(port int, browse bool) (int, error) {
+	args := []string{"-p", fmt.Sprint(port)}
+	if !browse {
+		args = append(args, "-no-open")
+	}
+	p, err := startDetached(args)
 	if err != nil {
 		return 0, err
 	}
@@ -156,7 +161,9 @@ func detach(port int) (int, error) {
 			return p.Pid, nil
 		}
 	}
-	return 0, fmt.Errorf("the background kban (pid %d) did not answer on port %d within 2s", p.Pid, port)
+	p.Kill() // else it may come up after this kban reported failure
+	p.Wait()
+	return 0, fmt.Errorf("the background kban did not answer on port %d within 2s, so it was stopped", port)
 }
 
 func serve(ln net.Listener, registry string, browse bool) error {
