@@ -234,15 +234,12 @@ func (h *hub) seen(w http.ResponseWriter, r *http.Request, local bool) {
 		http.Error(w, "Content-Type: application/json", http.StatusUnsupportedMediaType)
 		return
 	}
-	var req struct {
-		Board         string
-		Cards, Tokens []string
-	}
+	var req struct{ Tokens []string }
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	h.push.seen(req.Board, req.Cards, req.Tokens, local)
+	h.push.seen(req.Tokens, local)
 	w.WriteHeader(http.StatusNoContent)
 }
 

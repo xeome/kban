@@ -44,18 +44,8 @@ function loaded({ file, project, user, board, error }) {
   $('#file').textContent = document.title = `${project} / ${file}`;
   receive({ board, error });
   if (!S.dirty && !S.inflight) status('saved'); // else the save still owed says how it went
-  if (linked && S.base) {
-    const at = find(linked);
-    linked = null;
-    if (at) openCard(at.c, at.i);
-  }
   refill();
 }
-
-// A push's link names its card: it opens once, on the first board load, so
-// a stream reopening never opens it again.
-let linked = null;
-try { if (location.hash.startsWith('#card=')) linked = decodeURIComponent(location.hash.slice(6)); } catch {} // #card=% names no card
 
 // kban makes every card id. The tab keeps at least 16 in hand, topped up
 // after every add, so adding a card never waits on the server: a burst of
@@ -74,12 +64,9 @@ function receive({ board, error }) {
 }
 
 // Take a server board, unless local edits are pending; the save that
-// flushes them will bring the server's state back. Until then the screen
-// is behind: it may show a card where it no longer is.
-let behind = false;
+// flushes them will bring the server's state back.
 function adopt(board) {
-  behind = !!(S.dirty || S.inflight || S.edit);
-  if (behind) return;
+  if (S.dirty || S.inflight || S.edit) return;
   S.board = clone(board);
   S.base = clone(board);
   render();
@@ -148,7 +135,7 @@ export function listen() {
     if (SESSION === null) fetch(`${API}/board`).then((r) => r.status === 404 && problem('unlisted',
       `${S.file} is not in the hub's list of boards (~/.config/kban/boards). Run kban <file> to add it back.`), () => {});
   };
-  es.onmessage = (e) => { receive(JSON.parse(e.data)); tell(); };
+  es.onmessage = (e) => receive(JSON.parse(e.data));
   es.addEventListener('boards', (e) => { boards = JSON.parse(e.data); side(); });
   es.addEventListener('grill', (e) => {
     const ev = JSON.parse(e.data);
@@ -233,10 +220,8 @@ document.addEventListener('visibilitychange', side);
 
 // --- what the owner was shown ------------------------------------------------
 
-// The hub pushes each card entering Approve or Review, and each question,
-// unless a tab showed it first. Firefox on Wayland calls a tab on another workspace
-// visible; focus it does not claim. Review usually sits off screen, so
-// being on the board is not being shown.
+// The hub pushes each question unless a tab showed it first. Firefox on
+// Wayland calls a tab on another workspace visible; focus it does not claim.
 const onScreen = new Set();
 const watcher = new IntersectionObserver((entries) => {
   for (const e of entries) {
@@ -248,23 +233,14 @@ const watcher = new IntersectionObserver((entries) => {
 }, { threshold: [0, 0.5] });
 
 function watch() {
-  for (const el of document.querySelectorAll('#board .card[data-id], #side .item.ask[data-token]')) watcher.observe(el);
+  for (const el of document.querySelectorAll('#side .item.ask[data-token]')) watcher.observe(el);
 }
 
-// A card moved to another column is a new element, so the old one, still
-// in the set until its callback, never counts.
 function tell() {
-  if (document.visibilityState !== 'visible' || !document.hasFocus()) return;
-  let cards = [], tokens = [];
-  for (const el of onScreen) {
-    if (!el.isConnected) continue;
-    if (el.dataset.token) tokens.push(el.dataset.token);
-    else cards.push(el.dataset.id);
-  }
-  if (dialog.open) [cards, tokens] = [S.open ? [S.open] : [], []]; // the modal covers the rest
-  if (behind) cards = [];
-  if (!cards.length && !tokens.length) return;
-  fetch('/api/seen', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ board: ID, cards, tokens }) })
+  if (document.visibilityState !== 'visible' || !document.hasFocus() || dialog.open) return; // the modal covers the sidebar
+  const tokens = [...onScreen].filter((el) => el.isConnected && el.dataset.token).map((el) => el.dataset.token);
+  if (!tokens.length) return;
+  fetch('/api/seen', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tokens }) })
     .catch(() => {});
 }
 addEventListener('focus', tell);
@@ -812,7 +788,6 @@ export function render() {
   }
   paint(h(Board), board);
   paint(h(CardBody), dialog);
-  watch();
   if (S.open || S.adding) grow($('#card-notes'));
   rendering = false;
   const field = board.querySelector('input');

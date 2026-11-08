@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -40,7 +39,6 @@ type served struct {
 	stamp   string
 	subs    map[*stream]struct{}
 	gone    chan struct{}
-	waiting map[string]string // card id to its column, Approve or Review, at the last readable poll; nil before it; poll's alone
 }
 
 // A stream's signals are latest-wins: it writes the state as it is when it
@@ -198,32 +196,12 @@ func (h *hub) poll() {
 	if regChanged {
 		h.reload()
 	}
-	type read struct {
-		id    string
-		bf    *served
-		stamp string
-	}
-	var changed []read
-	h.mu.Lock()
-	for id, bf := range h.boards {
-		// Stamped before the read, so a write between the two is read by the next poll.
-		if st := stamp(bf.path); st != bf.stamp || bf.waiting == nil {
-			changed = append(changed, read{id, bf, st})
-		}
-	}
-	tail := h.tail
-	h.mu.Unlock()
-	// Outside the lock: making an item runs pidof. Before the signal: a tab
-	// that shows the card says so when its stream brings it.
-	for _, r := range changed {
-		h.waits(r.id, r.bf, tail)
-	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	for _, r := range changed {
-		if r.stamp != r.bf.stamp {
-			r.bf.stamp = r.stamp
-			for s := range r.bf.subs {
+	for _, bf := range h.boards {
+		if st := stamp(bf.path); st != bf.stamp {
+			bf.stamp = st
+			for s := range bf.subs {
 				signal(s.board)
 			}
 		}
@@ -239,37 +217,6 @@ func (h *hub) poll() {
 			signal(s.list)
 		}
 	}
-}
-
-// The first readable poll only records what waits: a hub starting, or a board
-// registered, pushes nothing old.
-func (h *hub) waits(id string, bf *served, tail string) {
-	b, err := bf.load()
-	if err != nil {
-		return
-	}
-	now := map[string]string{}
-	for _, col := range b.Columns {
-		if col.Title == "Approve" || col.Title == "Review" {
-			for _, c := range col.Cards {
-				now[c.ID] = col.Title
-			}
-		}
-	}
-	// Drops first: an item is the card's alone, so a drop after the add would close the new one.
-	for c, col := range bf.waiting {
-		if now[c] != col {
-			h.push.drop(id, c)
-		}
-	}
-	for _, col := range b.Columns {
-		for _, c := range col.Cards {
-			if bf.waiting != nil && now[c.ID] != "" && bf.waiting[c.ID] != now[c.ID] && tail != "" {
-				h.push.add(id, c.ID, tail+"/b/"+id+"#card="+url.PathEscape(c.ID), fmt.Sprintf("%s · %s\n%s", col.Title, bf.project, c.Title))
-			}
-		}
-	}
-	bf.waiting = now
 }
 
 func (h *hub) watch() {
