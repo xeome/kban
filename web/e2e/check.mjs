@@ -938,6 +938,7 @@ if (run('report')) {
   const projectRow = `#side .item[data-project="${path.basename(dir)}"]`;
   const projectDotted = `!!document.querySelector('${projectRow} .dot')`;
   const r = relay(port, 'rep-1');
+  const fence = (src) => '```mermaid\n' + src + '\n```\n\n';
   r.report('## First\n\n```mermaid\nflowchart LR\n  A --> B\n```');
   const drawn = await sp.until(`!!document.querySelector('.reports article svg')`, 20000) >= 0;
   const hidden = await sp.ev(`document.visibilityState === 'hidden' && window.__loaded === 1`);
@@ -964,11 +965,26 @@ if (run('report')) {
   check('a newer report with the session page hidden dots it again, lands above the first, and the first\'s diagram is the same node',
     back && both && kept, `back=${back} both=${both} kept=${kept}`);
 
+  // The icon rule's stroke reached into diagrams: it outlined flowchart labels and stroked an icon
+  // node's own svg. Mermaid's neo look shadows flowchart nodes and sequence participants. So the
+  // flowchart backs both halves, the sequence diagram only the shadow one: Mermaid unstrokes its labels.
+  r.report(fence('sequenceDiagram\n  participant A as Agent\n  participant H as Hub\n  A->>H: ask\n  H-->>A: answer')
+    + fence('flowchart TD\n  A@{ icon: "fa:user", form: "square", label: "User" } --> B[hub]'));
+  const mine = `document.querySelector('.reports article')`;
+  const two = await sp.until(`${mine}.querySelectorAll('.diagram').length === 2 && !${mine}.querySelector('.diagram .wait')`, 20000) >= 0;
+  const plain = JSON.parse(await sp.ev(`(() => { const a = ${mine}, all = [...a.querySelectorAll('.diagram svg, .diagram svg *')];
+    const glyphs = all.filter((e) => /^(text|tspan)$/.test(e.tagName) && [...e.childNodes].some((c) => c.nodeType === 3 && c.data.trim()));
+    return JSON.stringify({ stroked: glyphs.filter((e) => getComputedStyle(e).stroke !== 'none').length, glyphs: glyphs.length,
+      shadowed: all.filter((e) => getComputedStyle(e).filter !== 'none').length, seq: !!a.querySelector('.diagram svg .actor'),
+      icons: [...a.querySelectorAll('.diagram svg svg')].map((e) => getComputedStyle(e).stroke) }); })()`));
+  check('a flowchart\'s labels and icon draw with no outline, and neither it nor a sequence diagram has a shadow',
+    two && plain.stroked === 0 && plain.glyphs > 0 && plain.shadowed === 0 && plain.seq && plain.icons.length > 0 && plain.icons.every((s) => s === 'none'),
+    `two=${two} ${JSON.stringify(plain)}`);
+
   // z2a7gdgr's hostile diagrams.
   let hits = 0;
   const detector = http.createServer((req, res) => { hits++; res.end(); });
   await new Promise((done) => detector.listen(4398, '127.0.0.1', done));
-  const fence = (src) => '```mermaid\n' + src + '\n```\n\n';
   const control = 'flowchart LR\n  C --> D';
   agent(f, (b) => {
     card(b, 'A').notes = fence(control)
