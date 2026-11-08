@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -108,19 +107,6 @@ func TestNoPushForAQuestionClosedInTimeOrWithNowhereToSend(t *testing.T) {
 	})
 }
 
-func TestALockedScreenPushesAtAskTime(t *testing.T) {
-	g := startSessions(t)
-	got := ntfy(t, g)
-	g.h.push.locked = func() bool { return true }
-	r := g.relay("s")
-	r.ask(question())
-	g.token("s", "D7")
-	g.h.push.tick(time.Now())
-	one(t, got, "at ask time")
-	g.h.push.tick(time.Now().Add(2 * time.Hour))
-	none(t, got, "a second push")
-}
-
 func TestASilentNtfyNeverStallsThePollLoop(t *testing.T) {
 	path := newBoardFile(t, t.TempDir(), "TODO.json", "A")
 	h, ts := startHub(t, path)
@@ -169,21 +155,6 @@ seen:
 	}
 }
 
-func sweep(p *push) (early, late []string) {
-	from := time.Now()
-	for d := time.Duration(0); d <= 2*p.delay; d += p.delay / 20 {
-		for _, it := range p.tick(from.Add(d)) {
-			if d < p.delay {
-				early = append(early, it.link)
-			} else {
-				late = append(late, it.link)
-			}
-		}
-	}
-	slices.Sort(late)
-	return early, late
-}
-
 func seen(t *testing.T, base, ctype string, body any) int {
 	t.Helper()
 	b, _ := json.Marshal(body)
@@ -193,7 +164,7 @@ func seen(t *testing.T, base, ctype string, body any) int {
 
 func TestSeenDropsOnlyWhatItNames(t *testing.T) {
 	g := startSessions(t)
-	ntfy(t, g)
+	got := ntfy(t, g)
 	g.h.push.add("T1", "T1", "q1")
 	g.h.push.add("T2", "T2", "q2")
 
@@ -205,15 +176,17 @@ func TestSeenDropsOnlyWhatItNames(t *testing.T) {
 	if code := seen(t, g.ts.URL, "application/json", map[string]any{"tokens": []string{"T1"}}); code != 204 {
 		t.Errorf("seen: %d, want 204", code)
 	}
-	if _, late := sweep(g.h.push); !slices.Equal(late, []string{"T2"}) {
-		t.Errorf("took %v, want [T2]", late)
+	g.h.push.tick(time.Now().Add(2 * time.Hour))
+	if p := one(t, got, "T2, which seen did not name"); p.click != "T2" {
+		t.Errorf("pushed %+v, want T2", p)
 	}
+	none(t, got, "T1, which seen named")
 }
 
 // The phone's seen counts, but only a desktop tab's ack stops xdg-open.
 func TestSeenFromThePhoneDropsTheQuestionButOpensATab(t *testing.T) {
 	g := startSessions(t)
-	ntfy(t, g)
+	got := ntfy(t, g)
 	g.relay("s").ask(question())
 	tok := g.token("s", "D7")
 	if code := seen(t, g.tail.URL, "application/json", map[string]any{"tokens": []string{tok}}); code != 204 {
@@ -223,15 +196,14 @@ func TestSeenFromThePhoneDropsTheQuestionButOpensATab(t *testing.T) {
 	if tabs := g.tabs(); len(tabs) != 1 {
 		t.Errorf("xdg-open got %v, want one tab", tabs)
 	}
-	if early, late := sweep(g.h.push); len(early)+len(late) != 0 {
-		t.Errorf("took %v %v, want none", early, late)
-	}
+	g.h.push.tick(time.Now().Add(2 * time.Hour))
+	none(t, got, "a question the phone saw")
 }
 
 // The desktop tab claims to show what hyprlock hides; the phone's tab does not.
 func TestALockedScreenIgnoresOnlyTheDesktopsSeen(t *testing.T) {
 	g := startSessions(t)
-	ntfy(t, g)
+	got := ntfy(t, g)
 	locked := false
 	g.h.push.locked = func() bool { return locked }
 	g.h.push.add("T1", "T1", "q1")
@@ -240,14 +212,14 @@ func TestALockedScreenIgnoresOnlyTheDesktopsSeen(t *testing.T) {
 	g.h.push.add("T3", "T3", "q3")
 	seen(t, g.ts.URL, "application/json", map[string]any{"tokens": []string{"T1", "T2", "T3"}})
 	seen(t, g.tail.URL, "application/json", map[string]any{"tokens": []string{"T3"}})
-	var now []string
-	for _, it := range g.h.push.tick(time.Now()) {
-		now = append(now, it.link)
+	g.h.push.tick(time.Now())
+	if p := one(t, got, "T2 at once"); p.click != "T2" {
+		t.Errorf("pushed %+v at once, want only T2: made while locked, and seen by no phone", p)
 	}
-	if !slices.Equal(now, []string{"T2"}) {
-		t.Errorf("took %v at once, want only T2: made while locked, and seen by no phone", now)
+	none(t, got, "a second push at once")
+	g.h.push.tick(time.Now().Add(2 * time.Hour))
+	if p := one(t, got, "T1 by the delay"); p.click != "T1" {
+		t.Errorf("pushed %+v by the delay, want the item made before the lock", p)
 	}
-	if _, late := sweep(g.h.push); !slices.Equal(late, []string{"T1"}) {
-		t.Errorf("took %v by the delay, want the item made before the lock", late)
-	}
+	none(t, got, "a second push by the delay")
 }

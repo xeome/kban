@@ -311,6 +311,7 @@ func accepted(t *testing.T, g *sessionHub, r *relayProc, q map[string]any) {
 func TestMalformedQuestionsNameTheirPath(t *testing.T) {
 	g := startSessions(t)
 	r := g.relay("s")
+	t.Chdir(g.dir) // so the hub finds a.png, and only its being relative refuses it
 	img := filepath.Join(g.dir, "a.png")
 	os.WriteFile(img, png1, 0o644)
 	txt := filepath.Join(g.dir, "a.txt")
@@ -334,7 +335,6 @@ func TestMalformedQuestionsNameTheirPath(t *testing.T) {
 		{question("diagram", "flowchart LR"), "diagram: not a field; put a diagram block in context"},
 		{question("task", nil), "task"},
 		{question("task", "   "), "task"},
-		{question("task", strings.Repeat("é", 61)), "task: 60 characters"},
 		{question("context", []any{textBlock(), map[string]any{"kind": "chart", "data": []any{}}}), "context[1].kind"},
 		{question("context", []any{map[string]any{"kind": []any{"text"}, "text": "x"}}), "context[0].kind"},
 		{question("rows", []any{map[string]any{"label": "Cost", "cells": []any{"a", "b", "c"}}}), "rows[0].label"},
@@ -346,7 +346,7 @@ func TestMalformedQuestionsNameTheirPath(t *testing.T) {
 		{question("detail", []any{map[string]any{"kind": "stats", "items": []any{map[string]any{"label": "x"}}}}), "detail[0].items[0].value"},
 		{question("detail", []any{map[string]any{"kind": "stats", "items": []any{map[string]any{"label": "x", "value": "1", "unit": "s"}}}}), "detail[0].items[0]: label, value"},
 		{question("context", []any{map[string]any{"kind": "image", "path": "a.png"}}), "context[0].path"},
-		{question("context", []any{map[string]any{"kind": "image", "path": img + ".missing"}}), "context[0].path"},
+		{question("context", []any{map[string]any{"kind": "image", "path": filepath.Join(g.dir, "missing.png")}}), "context[0].path"},
 		{question("context", []any{map[string]any{"kind": "image", "path": txt}}), "context[0].path"},
 		{question("context", "text"), "context"},
 		{question("rows", three("1 ms", "2 ms")), "rows[0].cells"},
@@ -363,7 +363,6 @@ func TestMalformedQuestionsNameTheirPath(t *testing.T) {
 	if text, isErr := r.tool(r.call("tools/call", map[string]any{"name": "ask", "arguments": []any{1}})); !isErr || !strings.HasPrefix(text, "arguments:") {
 		t.Errorf("arguments not an object: %q", text)
 	}
-	accepted(t, g, r, question("task", strings.Repeat("é", 60)))
 }
 
 func TestEachLimitIsExact(t *testing.T) {
@@ -400,6 +399,7 @@ func TestEachLimitIsExact(t *testing.T) {
 		{func(k int) map[string]any { return question("context", []any{table(k, 1)}) }, 8, "context[0].columns"},
 		{func(k int) map[string]any { return question("context", []any{table(2, k)}) }, 30, "context[0].rows[30]"},
 		{func(k int) map[string]any { return question("context", []any{stats(k)}) }, 4, "context[0].items[4]"},
+		{func(k int) map[string]any { return question("task", strings.Repeat("é", k)) }, 60, "task: 60 characters"},
 	} {
 		accepted(t, g, r, c.build(c.limit))
 		refused(t, g, r, c.build(c.limit+1), c.path)

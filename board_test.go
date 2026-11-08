@@ -144,30 +144,6 @@ func TestMerge(t *testing.T) {
 	}
 }
 
-// A rename on one side and an edit on the other are two edits of one card.
-func TestMergeRename(t *testing.T) {
-	base := board(col("Todo", "a", "b"))
-	rename := func(c *Card) { c.Title = "a2" }
-	comment := func(c *Card) { c.Comments = []Comment{{"claude", "t1", "done"}} }
-	notes := func(c *Card) { c.Notes = "n" }
-	both := func(f, g func(*Card)) func(*Card) { return func(c *Card) { f(c); g(c) } }
-	cases := []struct {
-		name               string
-		client, disk, want Board
-	}{
-		{"client renames, disk comments", base.with(0, 0, rename), base.with(0, 0, comment), base.with(0, 0, both(rename, comment))},
-		{"disk renames, client comments", base.with(0, 0, comment), base.with(0, 0, rename), base.with(0, 0, both(rename, comment))},
-		{"client renames, disk edits notes", base.with(0, 0, rename), base.with(0, 0, notes), base.with(0, 0, both(rename, notes))},
-		{"disk renames, client edits notes", base.with(0, 0, notes), base.with(0, 0, rename), base.with(0, 0, both(rename, notes))},
-		{"both rename: client wins", base.with(0, 0, rename), base.with(0, 0, func(c *Card) { c.Title = "disk" }), base.with(0, 0, rename)},
-	}
-	for _, tc := range cases {
-		if got := Merge(base, tc.client, tc.disk); !reflect.DeepEqual(got, tc.want) {
-			t.Errorf("%s:\n got %+v\nwant %+v", tc.name, got, tc.want)
-		}
-	}
-}
-
 func TestMergeKeepsCardsWithNoColumn(t *testing.T) {
 	cases := []struct {
 		name                     string
@@ -185,14 +161,17 @@ func TestMergeKeepsCardsWithNoColumn(t *testing.T) {
 	}
 }
 
-// Every row is on one card, where a per-card "client wins" rule would drop
-// something.
+// A rename or a comment on one side and an edit on the other are two edits of
+// one card. Both land, where a per-card "client wins" rule would drop one.
 func TestMergeComments(t *testing.T) {
 	me, agent, dup := Comment{"me", "t1", "hi"}, Comment{"claude", "t2", "done"}, Comment{"claude", "t0", "same"}
 	on := func(b Board, notes string, cs ...Comment) Board {
 		return b.with(0, 0, func(c *Card) { c.Notes, c.Comments = notes, cs })
 	}
 	plain := board(col("Todo", "a", "b"))
+	edit := func(f func(*Card)) Board { return plain.with(0, 0, f) }
+	rename := func(c *Card) { c.Title = "a2" }
+	renamed := func(notes string, cs ...Comment) Board { return on(plain, notes, cs...).with(0, 0, rename) }
 	cases := []struct {
 		name                     string
 		base, client, disk, want Board
@@ -204,6 +183,11 @@ func TestMergeComments(t *testing.T) {
 		{"disk deletes a comment, client edits another card",
 			on(plain, "", agent), on(plain, "", agent).with(0, 1, func(c *Card) { c.Notes = "x" }), plain,
 			plain.with(0, 1, func(c *Card) { c.Notes = "x" })},
+		{"client renames, disk comments", plain, edit(rename), on(plain, "", agent), renamed("", agent)},
+		{"disk renames, client comments", plain, on(plain, "", agent), edit(rename), renamed("", agent)},
+		{"client renames, disk edits notes", plain, edit(rename), on(plain, "n"), renamed("n")},
+		{"disk renames, client edits notes", plain, on(plain, "n"), edit(rename), renamed("n")},
+		{"both rename: client wins", plain, edit(rename), edit(func(c *Card) { c.Title = "disk" }), edit(rename)},
 	}
 	for _, tc := range cases {
 		if got := Merge(tc.base, tc.client, tc.disk); !reflect.DeepEqual(got, tc.want) {

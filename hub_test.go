@@ -276,7 +276,8 @@ func TestRegisterAfterLastLineWithoutNewline(t *testing.T) {
 }
 
 // One poll that sees A and B change wakes A's stream for both: A's board
-// and the list, neither crowding out the other.
+// and the list, neither crowding out the other. A /s/{session} page gets
+// the list too, for its sidebar.
 func TestPollSendsBoardAndList(t *testing.T) {
 	dir := t.TempDir()
 	a := newBoardFile(t, filepath.Join(dir, "a"), "TODO.json", "A")
@@ -284,9 +285,14 @@ func TestPollSendsBoardAndList(t *testing.T) {
 	h, ts := startHub(t, a, b)
 	events := listen(t, ts.URL+"/api/b/"+fileID(a)+"/events")
 	nextList(t, events)
+	session := listen(t, ts.URL+"/api/s/sess/events")
+	nextList(t, session)
 	agentAdd(t, a, "new on A")
 	agentAdd(t, b, "new on B")
 	h.poll()
+	if l := nextList(t, session); len(l) != 2 || l[0].Version != stamp(a) || l[1].Version != stamp(b) {
+		t.Errorf("session page got boards %+v, want A at %s and B at %s, their new versions", l, stamp(a), stamp(b))
+	}
 	var gotBoard, gotList bool
 	for !gotBoard || !gotList {
 		e := next(t, events)
@@ -300,19 +306,6 @@ func TestPollSendsBoardAndList(t *testing.T) {
 			json.Unmarshal([]byte(e.data), &l)
 			gotList = len(l) == 2 && l[1].Version == stamp(b)
 		}
-	}
-}
-
-// A /s/{session} page has the boards sidebar too.
-func TestPollSendsTheListToSessionPages(t *testing.T) {
-	a := newBoardFile(t, t.TempDir(), "TODO.json", "A")
-	h, ts := startHub(t, a)
-	events := listen(t, ts.URL+"/api/s/sess/events")
-	nextList(t, events)
-	agentAdd(t, a, "new on A")
-	h.poll()
-	if l := nextList(t, events); len(l) != 1 || l[0].Version != stamp(a) {
-		t.Errorf("boards = %+v, want A at its new version %s", l, stamp(a))
 	}
 }
 
