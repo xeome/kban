@@ -155,7 +155,7 @@ export function CardBody() {
             <ol id="card-comments">
               {comments.length ? comments.map((cm, j) => (
                 <li class="comment">
-                  <span class="tile" aria-hidden="true">{(cm.author || '?').slice(0, 1).toUpperCase()}</span>
+                  <Tile of={cm.author} />
                   <div class="comment-body">
                     <div class="comment-head">
                       <span class="who">{cm.author || 'unknown'}</span>
@@ -201,6 +201,10 @@ function SessionLink({ id, current, children, ...props }) {
   );
 }
 
+// data-tip is the rail's tooltip, so the rows carry no title: a native one
+// would show beside it.
+const Tile = ({ of }) => <span class="tile" aria-hidden="true">{([...(of || '').trim()][0] || '?').toUpperCase()}</span>;
+
 // Projects are the union of the boards', the open questions' and the
 // reports', so a repo with no board still shows its agents.
 export function Sidebar({ boards, seen, shown, questions, reports, session }) {
@@ -213,13 +217,15 @@ export function Sidebar({ boards, seen, shown, questions, reports, session }) {
     <div class="group">
       <span class="head" title={project}>{project}</span>
       {qs.map((q) => (
-        <SessionLink class="item ask" id={q.session} current={q.session === session} data-token={q.token} title={`${q.task}\n${q.id}: ${q.question}`}>
+        <SessionLink class="item ask tip" id={q.session} current={q.session === session} data-token={q.token} data-tip={`${project} · ${q.task}\n${q.id}: ${q.question}`}>
+          <Tile of={q.task || q.id} />
           <span class="label">{q.id} · {q.task}</span>
           <span class="badge" role="img" aria-label="question waiting">?</span>
         </SessionLink>
       ))}
       {rs.map((r) => (
-        <SessionLink class="item report" id={r.session} current={r.session === session} data-session={r.session} title={r.session}>
+        <SessionLink class="item report tip" id={r.session} current={r.session === session} data-session={r.session} data-tip={`${project}\nReport · ${r.session}`}>
+          <Tile of="R" />
           <span class="label">Report · {new Date(r.time).toDateString() === new Date().toDateString()
             ? new Date(r.time).toLocaleTimeString(undefined, { timeStyle: 'short' }) : when(r.time)}</span>
           {r.time > (seen[r.session] ?? 0) ? <span class="dot" role="img" aria-label="new report" /> : null}
@@ -228,7 +234,8 @@ export function Sidebar({ boards, seen, shown, questions, reports, session }) {
       {bs.map((b) => {
         const changed = seen[b.id] !== b.version;
         return (
-          <button class="item" aria-current={b.id === shown ? 'page' : undefined} data-id={b.id} title={`${project} / ${b.file}`} onClick={() => go(`/b/${b.id}`)}>
+          <button class="item tip" aria-current={b.id === shown ? 'page' : undefined} data-id={b.id} data-tip={`${project} / ${b.file}`} onClick={() => go(`/b/${b.id}`)}>
+            <Tile of={b.file} />
             <span class="label">{b.file}</span>
             {changed ? <span class="dot" role="img" aria-label="changed" /> : null}
           </button>

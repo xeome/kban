@@ -53,16 +53,48 @@ svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 
 #side { flex: 0 0 200px; min-width: 0; min-height: 0; overflow: hidden auto; display: flex; flex-direction: column; gap: 18px; padding: 8px 0; }
 #side .group { display: flex; flex-direction: column; gap: 1px; }
-#side .head { padding: 0 9px 6px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; color: var(--dim); }
+#side .head { max-height: 3em; padding: 0 9px 6px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; color: var(--dim);
+             transition: opacity .16s ease .06s, max-height .22s cubic-bezier(.2,.8,.2,1), padding .22s cubic-bezier(.2,.8,.2,1); }
 #side .item { display: flex; align-items: center; gap: 10px; min-height: 32px; padding: 0 9px; border-radius: 8px; text-align: left; white-space: nowrap; color: var(--text); }
 #side .item:hover { background: var(--hover); }
 #side .item[aria-current='page'] { background: var(--sel); color: var(--bright); }
-#side .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#side .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; transition: opacity .16s ease .06s; }
+#side .item svg { margin: 0 3px; color: var(--dim); }
+#side .tile { width: 22px; height: 22px; }
+#side .item[aria-current='page'] .tile { color: var(--bright); }
+#groups { display: contents; }
+#side .top { display: flex; align-items: center; }
+#side .top > .item { width: 40px; flex: none; }
 #side a.item { text-decoration: none; }
 #side .badge { flex: none; display: grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
                background: var(--warm); color: var(--ground); font-size: 11px; font-weight: 600; }
 #side .dot { flex: none; width: 8px; height: 8px; margin-right: 3px; border-radius: 50%; background: var(--cool);
              box-shadow: 0 0 0 3px color-mix(in srgb, var(--cool) 22%, transparent); }
+
+/* A tooltip is fixed, so the scroller does not clip it, and anchored to its
+   row, because Chromium leaves a fixed box's static position where it was
+   before the rail scrolled. */
+@media (width > 820px) {
+  #side { position: relative; z-index: 2; transition: flex-basis .22s cubic-bezier(.2,.8,.2,1), gap .22s cubic-bezier(.2,.8,.2,1); }
+  #side.rail { flex-basis: 40px; gap: 10px; scrollbar-width: none; }
+  #side.rail :is(.label, .head) { opacity: 0; pointer-events: none; transition-delay: 0s; }
+  #side.rail .head { max-height: 0; padding-bottom: 0; }
+  #side.rail .item { position: relative; gap: 0; anchor-name: --row; anchor-scope: --row; }
+  #side.rail .badge { position: absolute; top: 1px; left: 23px; min-width: 14px; height: 14px; padding: 0 3px; font-size: 9px; }
+  #side.rail .dot { position: absolute; top: 4px; left: 27px; margin: 0; }
+  #side.rail .item[aria-expanded='false'] svg { color: var(--bright); }
+  #side.rail .tip::after {
+    content: attr(data-tip) / ""; position: fixed; margin-left: 41px; /* unanchored, the static position: the row's 9px padding + 32px */
+    width: max-content; max-width: 320px; white-space: pre-line; overflow-wrap: anywhere; padding: 5px 9px; border-radius: 6px;
+    background: var(--raised); border: 1px solid var(--line);
+    box-shadow: 0 0 0 1px var(--ring), inset 0 1px 0 var(--lift), 0 6px 20px rgba(0,0,0,.45);
+    color: var(--text); font-size: 12px; font-weight: 400; line-height: 1.4;
+    opacity: 0; pointer-events: none; transition: opacity .1s; z-index: 10;
+  }
+  @supports (position-area: right) { #side.rail .tip::after { position-anchor: --row; position-area: right; margin-left: 10px; } }
+  #side.rail .tip:hover::after, #side.rail .tip:focus-visible::after { opacity: 1; transition-delay: .3s; }
+}
+@media (prefers-reduced-motion: reduce) { #side, #side .label, #side .head { transition: none; } }
 
 .panel {
   flex: 1 1 0;
@@ -394,6 +426,7 @@ kbd {
   #side .group { flex-direction: row; align-items: center; }
   #side .head { padding: 0 4px 0 9px; }
   #side .label { overflow: visible; }
+  #side :is(.top, .tile) { display: none; }
   header, #note, footer { padding-left: 12px; padding-right: 12px; }
   .col { flex-basis: 290px; }
 }

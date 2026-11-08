@@ -183,7 +183,7 @@ function side() {
     }
     for (const r of reports) if (r.session === SESSION && visible) seen[r.session] = r.time;
   });
-  paint(h(Sidebar, { boards, seen, shown: ID, questions, reports, session: SESSION }), $('#side'));
+  paint(h(Sidebar, { boards, seen, shown: ID, questions, reports, session: SESSION }), $('#groups'));
   watch();
   // A question this sidebar shows needs no new tab, hidden or not. The
   // tailnet listener refuses the ack, so a phone never stops one opening.
@@ -217,6 +217,31 @@ function see(edit) {
   return seen;
 }
 document.addEventListener('visibilitychange', side);
+
+// Folding is a class and the toggle's own attributes, never a repaint, so
+// the rows (and the question tiles the push counts as shown) stay put.
+// index.html applies it before the first paint. CSS ignores the class at
+// phone width.
+const fold = $('#fold');
+const wide = matchMedia('(width > 820px)');
+function folded(on) {
+  $('#side').classList.toggle('rail', on);
+  const name = on ? 'Expand sidebar' : 'Collapse sidebar';
+  fold.setAttribute('aria-expanded', String(!on));
+  fold.setAttribute('aria-label', name);
+  fold.dataset.tip = `${name} · [`;
+  if (on) fold.removeAttribute('title'); else fold.title = fold.dataset.tip; // the rail tooltip says it
+  try { localStorage.side = on ? 'rail' : 'open'; } catch {}
+}
+folded($('#side').classList.contains('rail'));
+const flip = () => folded(!$('#side').classList.contains('rail'));
+fold.addEventListener('click', flip);
+document.addEventListener('keydown', (e) => {
+  const chord = (e.altKey || e.ctrlKey || e.metaKey) && !e.getModifierState('AltGraph'); // AltGr types [ on many layouts
+  if (e.key !== '[' || e.repeat || chord || !wide.matches || dialog.open || e.target.closest('input, textarea, select, [contenteditable]')) return;
+  e.preventDefault();
+  flip();
+});
 
 // --- what the owner was shown ------------------------------------------------
 
