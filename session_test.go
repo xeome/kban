@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -89,10 +90,10 @@ type sittingView struct {
 }
 
 type sessionsEvent struct {
-	Open    []openLine
-	Reports []struct {
-		Session, Project string
-		Time             int64
+	Open     []openLine
+	Sessions []struct {
+		Session, Project, Task, Branch, Line string
+		Time                                 int64
 	}
 	Session struct {
 		Source    *source
@@ -557,12 +558,15 @@ func TestAReportReturnsAtOnceAndReachesItsSessionOnly(t *testing.T) {
 		e := next(t, events)
 		var v sessionsEvent
 		json.Unmarshal([]byte(e.data), &v)
-		if e.name != "sessions" || len(v.Reports) == 0 {
+		if e.name != "sessions" || len(v.Sessions) == 0 {
 			continue
 		}
-		if strings.Contains(e.data, "flowchart") || len(v.Reports) != 1 || v.Reports[0].Session != "s" ||
-			v.Reports[0].Project != filepath.Base(g.dir) || v.Reports[0].Time != reps[0].Time {
+		if strings.Contains(e.data, "flowchart") || len(v.Sessions) != 1 || v.Sessions[0].Session != "s" ||
+			v.Sessions[0].Project != filepath.Base(g.dir) || v.Sessions[0].Time != reps[0].Time {
 			t.Errorf("the board stream's sessions event: %s, want session s, its project and time, and no text", e.data)
+		}
+		if strings.Contains(e.data, `"line"`) {
+			t.Errorf("the board stream's sessions event: %s, want no report line", e.data)
 		}
 		break
 	}
@@ -571,7 +575,7 @@ func TestAReportReturnsAtOnceAndReachesItsSessionOnly(t *testing.T) {
 	if reps := g.view("t").Session.Reports; len(reps) != 1 || reps[0].Text != "from t" {
 		t.Errorf("session t's page: %+v, want its own report alone", reps)
 	}
-	if lines := g.view("s").Reports; len(lines) != 2 || lines[0].Session != "t" || lines[1].Session != "s" {
+	if lines := g.view("s").Sessions; len(lines) != 2 || lines[0].Session != "t" || lines[1].Session != "s" {
 		t.Errorf("reporting sessions = %+v, want t, then s", lines)
 	}
 	if msg, isErr := r.tool(r.report(strings.Repeat("x", reportText+1))); !isErr || !strings.Contains(msg, "64 KiB") {
@@ -584,33 +588,160 @@ func TestAReportReturnsAtOnceAndReachesItsSessionOnly(t *testing.T) {
 
 func (g *sessionHub) report(session, text string) {
 	g.t.Helper()
-	body, _ := json.Marshal(map[string]any{"relay": "r", "session": session, "cwd": g.dir, "text": text})
+	g.reportFrom(session, g.dir, text)
+}
+
+func (g *sessionHub) reportFrom(session, cwd, text string) {
+	g.t.Helper()
+	body, _ := json.Marshal(map[string]any{"relay": "r", "session": session, "cwd": cwd, "text": text})
 	if code, out := post(g.t, g.ts.URL+"/api/report", "application/json", body); code != 200 {
 		g.t.Fatalf("report %q: %d %s", text, code, out)
 	}
 }
 
-func TestTheHubKeepsTheNewest50Reports(t *testing.T) {
+// Each row fails a different wrong rule. A session keeps its newest 50; once
+// the hub holds 500, a session below 50 takes the oldest report of the
+// stalest other session that holds one.
+func TestEachSessionKeepsItsNewest50Reports(t *testing.T) {
+	type run struct {
+		session string
+		n       int
+	}
+	others := func(last int) []run {
+		rs := []run{}
+		for i := 1; i <= 9; i++ {
+			rs = append(rs, run{fmt.Sprint("s", i), 50})
+		}
+		return append(rs, run{"s10", last})
+	}
+	for _, c := range []struct {
+		name  string
+		asker string
+		runs  []run
+		want  map[string]int
+	}{
+		{"a busy session drops only its own oldest", "", []run{{"a", 1}, {"b", 51}}, map[string]int{"a": 1, "b": 50}},
+		{"at 500 the stalest session loses, not the oldest report or the largest session", "",
+			append([]run{{"a", 1}, {"s1", 49}, {"a", 1}}, others(50)[1:]...), map[string]int{"a": 2, "s1": 48}},
+		{"a session at 50 with the hub at 500 takes from no one", "", append(others(50), run{"s1", 1}), map[string]int{"s1": 50}},
+		{"the stalest other, never the reporting session itself", "", append(append([]run{{"a", 1}}, others(49)...), run{"a", 1}),
+			map[string]int{"a": 2, "s1": 49}},
+		{"a session with no report is never the stalest", "z", append(append([]run{{"x", 1}}, others(49)...), run{"n", 2}),
+			map[string]int{"x": 0, "z": 0, "n": 2, "s1": 49}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			g := startSessions(t)
+			if c.asker != "" {
+				g.relay(c.asker).ask(question())
+				g.token(c.asker, "D7")
+			}
+			sent := map[string][]string{}
+			seq := 0
+			for _, r := range c.runs {
+				for range r.n {
+					g.report(r.session, fmt.Sprint(seq))
+					sent[r.session] = append(sent[r.session], fmt.Sprint(seq))
+					seq++
+				}
+			}
+			if c.asker != "" {
+				sent[c.asker] = nil
+			}
+			times := make([]int64, seq)
+			held := 0
+			listed := map[string]bool{}
+			for _, l := range g.view(c.runs[0].session).Sessions {
+				listed[l.Session] = true
+			}
+			for s, texts := range sent {
+				want, named := c.want[s]
+				if !named {
+					want = len(texts)
+				}
+				reps := g.view(s).Session.Reports
+				got := []string{}
+				for _, rep := range slices.Backward(reps) {
+					got = append(got, rep.Text)
+					var at int
+					fmt.Sscan(rep.Text, &at)
+					times[at] = rep.Time
+				}
+				if !slices.Equal(got, texts[len(texts)-want:]) {
+					t.Errorf("session %s kept %v, want its newest %d of %v", s, got, want, texts)
+				}
+				held += len(reps)
+				if listed[s] != (s == c.asker || want > 0) {
+					t.Errorf("session %s listed: %v, want only a session with a task or a report", s, listed[s])
+				}
+			}
+			if held > 500 {
+				t.Errorf("the hub holds %d reports, want at most 500", held)
+			}
+			last := int64(0)
+			for at, tm := range times {
+				if tm != 0 && tm <= last {
+					t.Errorf("report %d has time %d after %d: times must rise across the hub", at, tm, last)
+				}
+				last = max(last, tm)
+			}
+		})
+	}
+}
+
+func TestASessionsLineIsItsNewestReportsFirstLine(t *testing.T) {
 	g := startSessions(t)
-	g.report("a", "r0")
-	for i := 1; i <= 50; i++ {
-		g.report("b", fmt.Sprint("r", i))
-	}
-	v := g.view("b")
-	reps := v.Session.Reports
-	if len(reps) != 50 {
-		t.Fatalf("%d reports, want 50", len(reps))
-	}
-	for i, rep := range reps {
-		if rep.Text != fmt.Sprint("r", 50-i) || i > 0 && rep.Time >= reps[i-1].Time {
-			t.Fatalf("reports[%d] = %+v after %+v, want r%d, newest first, each its own time", i, rep, reps[max(i-1, 0)], 50-i)
+	g.relay("q").ask(question())
+	g.token("q", "D7")
+	line := func(want string) {
+		t.Helper()
+		v := g.view("r")
+		for _, l := range v.Sessions {
+			if l.Session == "q" && (l.Task != "session store" || l.Line != "" || l.Time != 0 || l.Project != filepath.Base(g.dir)) {
+				t.Errorf("the asking session's line: %+v, want its task and project, no time and no line", l)
+			}
+			if l.Session == "r" && (l.Line != want || len(v.Session.Reports) == 0 || l.Time != v.Session.Reports[0].Time) {
+				t.Errorf("the reporting session's line: %+v, want %q at its newest report's time", l, want)
+			}
+		}
+		if len(v.Sessions) != 3 {
+			t.Errorf("sessions: %+v, want q, r and o", v.Sessions)
 		}
 	}
-	if len(v.Reports) != 1 || v.Reports[0].Session != "b" || v.Reports[0].Time != reps[0].Time {
-		t.Errorf("reporting sessions = %+v, want b alone at its newest time", v.Reports)
+	other := filepath.Join(t.TempDir(), "elsewhere")
+	os.Mkdir(other, 0o755)
+	g.reportFrom("o", other, "# Other")
+	g.report("r", "\n\n## "+strings.Repeat("€", 100)+"\nsecond")
+	line(strings.Repeat("€", 66)) // 198 bytes: the cut stays on a rune boundary
+	g.report("r", "\n# Title\nsecond")
+	line("Title")
+	g.report("r", "#123 fixed")
+	line("#123 fixed") // not a heading: no space after the #
+	for _, c := range []struct{ page, session, want string }{{"r", "o", ""}, {"o", "o", "Other"}, {"o", "r", ""}} {
+		for _, l := range g.view(c.page).Sessions {
+			if l.Session == c.session && l.Line != c.want {
+				t.Errorf("session %s's line on %s's page: %q, want %q: a page lists only its own project's lines", c.session, c.page, l.Line, c.want)
+			}
+		}
 	}
-	if a := g.view("a").Session.Reports; len(a) != 0 {
-		t.Errorf("session a kept %+v, the oldest report", a)
+}
+
+func TestAReportRefreshesTheSessionsBranch(t *testing.T) {
+	repo := filepath.Join(t.TempDir(), "projx")
+	if out, err := exec.Command("git", "init", "-q", "-b", "one", repo).CombinedOutput(); err != nil {
+		t.Skip("no git:", err, string(out))
+	}
+	g := startSessions(t)
+	r := startRelay(t, portOf(g.ts), "s", repo)
+	id := r.ask(question("task", "sidebar redesign"))
+	g.answer(g.token("s", "D7"), map[string]any{"kind": "defer"})
+	r.answerOf(id)
+	g.reportFrom("s", repo, "on one")
+	if out, err := exec.Command("git", "-C", repo, "switch", "-q", "-c", "two").CombinedOutput(); err != nil {
+		t.Fatal(err, string(out))
+	}
+	g.reportFrom("s", repo, "on two")
+	if src := g.view("s").Session.Source; src == nil || src.Branch != "two" || src.Task != "sidebar redesign" {
+		t.Errorf("source after a switch and a report: %+v, want branch two and the ask's task", src)
 	}
 }
 

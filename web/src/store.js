@@ -1,7 +1,7 @@
 import { h, render as paint } from 'preact';
 import { showSession } from './blocks.jsx';
 import { retheme } from './diagram.js';
-import { Board, CardBody, Sidebar } from './view.jsx';
+import { Board, CardBody, Sessions, Sidebar, Tabs } from './view.jsx';
 
 const $ = (s) => document.querySelector(s);
 const clone = (v) => JSON.parse(JSON.stringify(v));
@@ -41,7 +41,8 @@ export const S = {
 function loaded({ file, project, user, board, error }) {
   S.file = file;
   S.user = user;
-  $('#file').textContent = document.title = `${project} / ${file}`;
+  $('#file').textContent = project;
+  document.title = `${project} / ${file}`;
   receive({ board, error });
   if (!S.dirty && !S.inflight) status('saved'); // else the save still owed says how it went
   refill();
@@ -140,7 +141,7 @@ export function listen() {
   es.addEventListener('sessions', (e) => {
     const ev = JSON.parse(e.data);
     questions = ev.open;
-    reports = ev.reports;
+    sessions = ev.sessions;
     side();
     if (ev.session) session(ev.session);
     tell();
@@ -167,23 +168,32 @@ function problem(error, text = `${S.file} can't be read: ${error}. Your changes 
   el.textContent = error ? text : '';
 }
 
-// --- the boards sidebar ----------------------------------------------------
+// --- the projects sidebar, the tabs and the Sessions list --------------------
 
 // Painted only here, on the server's boards and sessions events and when the
 // tab shows again, never by render(), which selects inputs and scrolls.
 let boards = [];
 let questions = [];
-let reports = [];
+let sessions = [];
 const acked = new Set();
+export const sessionURL = (id) => `/s/${encodeURIComponent(id)}`;
+const HERE = SESSION === null ? `/b/${ID}` : sessionURL(SESSION);
 function side() {
   const visible = document.visibilityState === 'visible';
   const seen = see((seen) => {
     for (const b of boards) {
       if (!(b.id in seen) || (b.id === ID && visible)) seen[b.id] = b.version;
     }
-    for (const r of reports) if (r.session === SESSION && visible) seen[r.session] = r.time;
+    for (const s of sessions) if (s.session === SESSION && s.time && visible) seen[s.session] = s.time;
   });
-  paint(h(Sidebar, { boards, seen, shown: ID, questions, reports, session: SESSION }), $('#groups'));
+  const all = projects(seen);
+  const here = SESSION === null ? boards.find((b) => b.id === ID)?.project : sessions.find((s) => s.session === SESSION)?.project;
+  const p = all.find((x) => x.name === here);
+  const last = stored('sessionStorage', 'last', (last) => { if (p) last[here] = HERE; });
+  for (const x of all) x.href = landing(x, last[x.name]);
+  paint(h(Sidebar, { projects: all, here }), $('#groups'));
+  paint(p ? h(Tabs, { p, shown: ID, session: SESSION }) : null, $('#tabs'));
+  paint(p && SESSION !== null ? h(Sessions, { p, session: SESSION }) : null, $('#list'));
   watch();
   // A question this sidebar shows needs no new tab, hidden or not. The
   // tailnet listener refuses the ack, so a phone never stops one opening.
@@ -194,13 +204,38 @@ function side() {
   }
 }
 
+// A project is the union of its boards', open questions' and sessions', so
+// a repo with no board still shows its agents. Its sessions list waiting
+// ones first, then by newest report, the order the hub sends.
+function projects(seen) {
+  const all = new Map();
+  const at = (name) => all.get(name) || all.set(name, { name, boards: [], sessions: [], tokens: [] }).get(name);
+  for (const b of boards) at(b.project).boards.push({ ...b, changed: seen[b.id] !== b.version });
+  for (const q of questions) at(q.project).tokens.push(q.token);
+  for (const s of sessions) {
+    const waiting = questions.filter((q) => q.session === s.session).length;
+    at(s.project).sessions.push({ ...s, waiting, unread: s.time > (seen[s.session] ?? 0) });
+  }
+  for (const p of all.values()) {
+    p.sessions.sort((a, b) => !a.waiting - !b.waiting);
+    p.unread = p.boards.some((b) => b.changed) || p.sessions.some((s) => s.unread);
+  }
+  return [...all.values()];
+}
+
+function landing(p, last) {
+  const waiting = p.sessions.find((s) => s.waiting);
+  const listed = p.boards.some((b) => `/b/${b.id}` === last) || p.sessions.some((s) => sessionURL(s.session) === last);
+  return waiting ? sessionURL(waiting.session) : listed ? last : p.boards[0] ? `/b/${p.boards[0].id}` : sessionURL(p.sessions[0].session);
+}
+
 // --- a session's page ------------------------------------------------------
 
 function session(s) {
   const src = s.source;
   const asking = s.questions.length > 0;
   const file = $('#file');
-  file.textContent = src ? [src.task, src.project, src.branch].filter(Boolean).join(' · ') : 'An agent session';
+  file.textContent = src ? src.project : 'An agent session';
   file.title = src?.path || '';
   document.title = (asking ? '● ' : '') + (src ? [src.task, src.project].filter(Boolean).join(' · ') : 'kban'); // a session that only reported has no task
   status(asking ? 'asking' : 'idle', asking ? 'Waiting for your answer' : 'Waiting for the next question');
@@ -209,12 +244,15 @@ function session(s) {
 
 // see changes the version of each board, and the newest report time of each
 // session, this browser last showed, shared by its tabs, and returns them.
-function see(edit) {
-  let seen = {};
-  try { seen = JSON.parse(localStorage.seen || '{}'); } catch {}
-  edit(seen);
-  try { localStorage.seen = JSON.stringify(seen); } catch {}
-  return seen;
+function see(edit) { return stored('localStorage', 'seen', edit); }
+
+// Even naming a blocked storage throws, so both sides are caught.
+function stored(storage, key, edit) {
+  let v = {};
+  try { v = JSON.parse(window[storage][key] || '{}'); } catch {}
+  edit(v);
+  try { window[storage][key] = JSON.stringify(v); } catch {}
+  return v;
 }
 document.addEventListener('visibilitychange', side);
 
@@ -258,12 +296,12 @@ const watcher = new IntersectionObserver((entries) => {
 }, { threshold: [0, 0.5] });
 
 function watch() {
-  for (const el of document.querySelectorAll('#side .item.ask[data-token]')) watcher.observe(el);
+  for (const el of document.querySelectorAll('#side .item[data-tokens]')) watcher.observe(el);
 }
 
 function tell() {
   if (document.visibilityState !== 'visible' || !document.hasFocus() || dialog.open) return; // the modal covers the sidebar
-  const tokens = [...onScreen].filter((el) => el.isConnected && el.dataset.token).map((el) => el.dataset.token);
+  const tokens = [...onScreen].filter((el) => el.isConnected).flatMap((el) => el.dataset.tokens.split(' ').filter(Boolean));
   if (!tokens.length) return;
   fetch('/api/seen', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tokens }) })
     .catch(() => {});

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -47,20 +48,22 @@ var (
 type session struct {
 	source  *source
 	sitting []*asked
+	reports []report
 }
 
 // A report is keyed by its time in Unix ms, unique across the hub.
 type report struct {
-	Time             int64  `json:"time"`
-	Text             string `json:"text"`
-	session, project string
+	Time int64  `json:"time"`
+	Text string `json:"text"`
 }
 
-// The hub keeps the newest reportMax reports of all its sessions in one list,
-// in memory: a restart loses them, as it loses the sitting. A session page's
-// event carries that session's reports, marshalled under h.mu, so a report's text is capped.
+// Each session keeps its newest reportMax reports, and the hub at most
+// reportHub, in memory: a restart loses them, as it loses the sitting. A
+// session page's event carries that session's reports, marshalled under
+// h.mu, so a report's text is capped.
 const (
 	reportMax  = 50
+	reportHub  = 500
 	reportText = 64 << 10
 )
 
@@ -486,22 +489,33 @@ func (h *hub) report(w http.ResponseWriter, r *http.Request) {
 	}
 	src := where(req.Cwd)
 	h.mu.Lock()
-	t := time.Now().UnixMilli()
-	if n := len(h.reports); n > 0 {
-		t = max(t, h.reports[n-1].Time+1)
-	}
-	if len(h.reports) == reportMax {
-		h.reports = slices.Delete(h.reports, 0, 1) // which clears the freed slot: the dropped text goes
-	}
-	h.reports = append(h.reports, report{Time: t, Text: req.Text, session: req.Session, project: src.Project})
 	s := h.sessions[req.Session]
 	if s == nil {
 		s = &session{}
 		h.sessions[req.Session] = s
 	}
-	if s.source == nil { // an ask's source names its task, so it stays
-		s.source = &src
+	if s.source != nil { // an ask's source names its task, so it stays
+		src.Task = s.source.Task
 	}
+	s.source = &src
+	// The hub's newest report is never dropped, so times rise across the hub from it.
+	t, held, stalest := time.Now().UnixMilli(), 0, (*session)(nil)
+	for _, o := range h.sessions {
+		if n := len(o.reports); n > 0 {
+			held += n
+			t = max(t, o.reports[n-1].Time+1)
+			if o != s && (stalest == nil || o.reports[n-1].Time < stalest.reports[len(stalest.reports)-1].Time) {
+				stalest = o
+			}
+		}
+	}
+	// slices.Delete clears the freed slot, so the dropped text goes.
+	if len(s.reports) == reportMax {
+		s.reports = slices.Delete(s.reports, 0, 1)
+	} else if held >= reportHub { // s holds under 50, so others hold over 450: stalest is set
+		stalest.reports = slices.Delete(stalest.reports, 0, 1)
+	}
+	s.reports = append(s.reports, report{t, req.Text})
 	h.sessionsChangedLocked()
 	h.mu.Unlock()
 	io.WriteString(w, "http://"+r.Context().Value(http.LocalAddrContextKey).(net.Addr).String()+"/s/"+url.PathEscape(req.Session))
@@ -618,10 +632,29 @@ type openLine struct {
 	Question any    `json:"question"`
 }
 
-type reportLine struct {
+// Line goes only on a session page's stream, for its project's sessions: a
+// board's stream carries no report text.
+type sessionLine struct {
 	Session string `json:"session"`
 	Project string `json:"project"`
+	Task    string `json:"task"`
+	Branch  string `json:"branch"`
 	Time    int64  `json:"time"`
+	Line    string `json:"line,omitempty"`
+}
+
+// firstLine is a report's first non-empty line, a heading marker trimmed, cut to 200 bytes.
+func firstLine(text string) string {
+	for l := range strings.Lines(text) {
+		l = strings.TrimSpace(l)
+		if h := strings.TrimLeft(l, "#"); len(l)-len(h) <= 6 && (h == "" || h[0] == ' ' || h[0] == '\t') {
+			l = strings.TrimSpace(h)
+		}
+		if l != "" {
+			return strings.ToValidUTF8(l[:min(len(l), 200)], "") // drops a rune the cut split
+		}
+	}
+	return ""
 }
 
 type sittingLine struct {
@@ -640,16 +673,13 @@ type shownQuestion struct {
 
 func (h *hub) sessionsEventLocked(session string) []byte {
 	ev := struct {
-		Open    []openLine   `json:"open"`
-		Reports []reportLine `json:"reports"`
-		Session any          `json:"session,omitempty"`
-	}{Open: []openLine{}, Reports: []reportLine{}}
-	reported := map[string]bool{}
-	for _, rep := range slices.Backward(h.reports) {
-		if !reported[rep.session] {
-			reported[rep.session] = true
-			ev.Reports = append(ev.Reports, reportLine{rep.session, rep.project, rep.Time})
-		}
+		Open     []openLine    `json:"open"`
+		Sessions []sessionLine `json:"sessions"`
+		Session  any           `json:"session,omitempty"`
+	}{Open: []openLine{}, Sessions: []sessionLine{}}
+	var page *source
+	if s := h.sessions[session]; s != nil {
+		page = s.source
 	}
 	for _, sid := range slices.Sorted(maps.Keys(h.sessions)) {
 		s := h.sessions[sid]
@@ -658,7 +688,19 @@ func (h *hub) sessionsEventLocked(session string) []byte {
 				ev.Open = append(ev.Open, openLine{e.token, sid, s.source.Project, e.q["task"].(string), e.id, e.q["question"]})
 			}
 		}
+		if s.source.Task == "" && len(s.reports) == 0 { // a report-only session whose reports were all dropped
+			continue
+		}
+		l := sessionLine{Session: sid, Project: s.source.Project, Task: s.source.Task, Branch: s.source.Branch}
+		if n := len(s.reports); n > 0 {
+			l.Time = s.reports[n-1].Time
+			if page != nil && s.source.Project == page.Project {
+				l.Line = firstLine(s.reports[n-1].Text)
+			}
+		}
+		ev.Sessions = append(ev.Sessions, l)
 	}
+	slices.SortStableFunc(ev.Sessions, func(a, b sessionLine) int { return cmp.Compare(b.Time, a.Time) })
 	if session != "" {
 		out := struct {
 			Source    *source         `json:"source"`
@@ -666,13 +708,10 @@ func (h *hub) sessionsEventLocked(session string) []byte {
 			Questions []shownQuestion `json:"questions"`
 			Reports   []report        `json:"reports"`
 		}{Sitting: []sittingLine{}, Questions: []shownQuestion{}, Reports: []report{}}
-		for _, rep := range slices.Backward(h.reports) {
-			if rep.session == session {
-				out.Reports = append(out.Reports, rep)
-			}
-		}
 		if s := h.sessions[session]; s != nil {
 			out.Source = s.source
+			out.Reports = append(out.Reports, s.reports...)
+			slices.Reverse(out.Reports)
 			for _, e := range s.sitting {
 				out.Sitting = append(out.Sitting, sittingLine{e.id, e.question, e.status, e.answer, e.relay})
 				if e.status == "open" {

@@ -5,7 +5,7 @@
 <title>kban</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/app.css">
-<nav id="side" aria-label="Boards">
+<nav id="side" aria-label="Projects">
   <div class="top"><button id="fold" class="item tip"><svg viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="2"/><path d="M6.5 3v10"/></svg></button></div>
   <div id="groups"></div>
 </nav>
@@ -16,10 +16,11 @@
   <span id="status"></span>
   <button id="theme" title="Switch theme" aria-label="Switch theme"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="M8 2.5v11A5.5 5.5 0 0 0 8 2.5z" fill="currentColor"/></svg></button>
 </header>
+<nav id="tabs" class="scroll" aria-label="Boards and sessions"></nav>
 <div id="problem" role="alert" hidden></div>
 <textarea id="note" rows="1" spellcheck="false" readonly placeholder="Instructions for you and your agents — kept at the top of the file"></textarea>
 <main id="board"></main>
-<div id="sess"></div>
+<div id="session"><nav id="list" class="sessions" aria-label="Sessions"></nav><div id="sess"></div></div>
 <footer>
   <span>Click a card to open it, drag to move it. Keys:</span>
   <span><kbd>↑↓←→</kbd> select</span>

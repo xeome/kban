@@ -102,6 +102,12 @@ const repaint = () => last && showSession(last, root);
 function Session({ s }) {
   return (
     <>
+      {s.source ? (
+        <div class="who">
+          {s.source.task ? <h2>{s.source.task}</h2> : null}
+          <div class="sub" title={s.source.path}>{[s.source.project, s.source.branch].filter(Boolean).join(' · ')}</div>
+        </div>
+      ) : null}
       {unsent.length ? <div class="unsents">{unsent.map((u) => <Unsent {...u} />)}</div> : null}
       <div class="qs">{s.questions.map((q) => <Question key={q.token} token={q.token} q={q.question} lean={leanOf(s.sitting, q)} />)}</div>
       {s.questions.length ? null : <Waiting sitting={s.sitting} />}

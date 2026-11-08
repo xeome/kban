@@ -17,8 +17,9 @@ Or from a clone, into `$(go env GOPATH)/bin`:
     kban [board.json]        # default ./TODO.json, created if missing
     kban -d [board.json]     # the same, with the hub in the background
 
-One kban, the hub, serves every board in one tab: a sidebar lists them by
-project and marks the ones that changed since you last looked. `kban FILE`
+One kban, the hub, serves every board in one tab. A sidebar lists projects.
+A project opens with a tab per board and a Sessions tab. A dot marks what
+changed since you last looked. `kban FILE`
 adds the file to `~/.config/kban/boards` (`$XDG_CONFIG_HOME/kban/boards`),
 one absolute path per line, and opens it on the hub, starting the hub first
 if none runs on the port. Delete a line to drop that board. `kban -d` with no

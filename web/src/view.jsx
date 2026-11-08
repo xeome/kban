@@ -3,7 +3,7 @@ import { diagram } from './diagram.js';
 import { md } from './md.js';
 import {
   S, addCard, addColumn, addNew, addingColumn, closeCard, colKey, deleteComment, deleteOpenCard, discardNew, draftInput, editKeys, find, go, leaveEdit, moveOpenCard, newNotesInput, newTitleInput, notesBlur, notesFocus,
-  notesInput, openCard, post, remove, startEdit, step, titleBlur, titleFocus, when,
+  notesInput, openCard, post, remove, sessionURL, startEdit, step, titleBlur, titleFocus, when,
 } from './store.js';
 
 const X = () => <svg viewBox="0 0 16 16"><path d="M4.5 4.5l7 7m0-7l-7 7" /></svg>;
@@ -190,13 +190,13 @@ export function CardBody() {
   );
 }
 
-function SessionLink({ id, current, children, ...props }) {
-  const url = `/s/${encodeURIComponent(id)}`;
+// A link that waits for this tab's unsaved edits before it leaves.
+function Link({ href, current, children, ...props }) {
   return (
-    <a href={url} aria-current={current ? 'page' : undefined} {...props} onClick={(e) => {
+    <a href={href} aria-current={current ? 'page' : undefined} {...props} onClick={(e) => {
       if (e.button || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return; // a new tab or window: the browser's own
       e.preventDefault();
-      go(url);
+      go(href);
     }}>{children}</a>
   );
 }
@@ -204,44 +204,53 @@ function SessionLink({ id, current, children, ...props }) {
 // data-tip is the rail's tooltip, so the rows carry no title: a native one
 // would show beside it.
 const Tile = ({ of }) => <span class="tile" aria-hidden="true">{([...(of || '').trim()][0] || '?').toUpperCase()}</span>;
+const Badge = ({ n }) => n ? <span class="badge" role="img" aria-label={`${n} question${n > 1 ? 's' : ''} waiting`}>{n > 1 ? `?${n}` : '?'}</span> : null;
+const Dot = ({ on, label }) => on ? <span class="dot" role="img" aria-label={label} /> : null;
 
-// Projects are the union of the boards', the open questions' and the
-// reports', so a repo with no board still shows its agents.
-export function Sidebar({ boards, seen, shown, questions, reports, session }) {
-  const projects = new Map();
-  const group = (p) => projects.get(p) || projects.set(p, { boards: [], qs: [], rs: [] }).get(p);
-  for (const b of boards) group(b.project).boards.push(b);
-  for (const q of questions) group(q.project).qs.push(q);
-  for (const r of reports) if (!questions.some((q) => q.session === r.session)) group(r.project).rs.push(r);
-  return [...projects].map(([project, { boards: bs, qs, rs }]) => (
-    <div class="group">
-      <span class="head" title={project}>{project}</span>
-      {qs.map((q) => (
-        <SessionLink class="item ask tip" id={q.session} current={q.session === session} data-token={q.token} data-tip={`${project} · ${q.task}\n${q.id}: ${q.question}`}>
-          <Tile of={q.task || q.id} />
-          <span class="label">{q.id} · {q.task}</span>
-          <span class="badge" role="img" aria-label="question waiting">?</span>
-        </SessionLink>
+// A project row stands for every question waiting in it: data-tokens is
+// what the hub is told this tab showed.
+export function Sidebar({ projects, here }) {
+  return projects.map((p) => (
+    <Link class="item tip" href={p.href} current={p.name === here} data-project={p.name} data-tokens={p.tokens.join(' ')} data-tip={p.name}>
+      <Tile of={p.name} />
+      <span class="label">{p.name}</span>
+      <Badge n={p.tokens.length} />
+      <Dot on={p.unread} label="changed" />
+    </Link>
+  ));
+}
+
+export function Tabs({ p, shown, session }) {
+  return (
+    <>
+      {p.boards.map((b) => (
+        <Link class="tab" href={`/b/${b.id}`} current={b.id === shown} data-id={b.id}>
+          <span class="file">{b.file}</span><Dot on={b.changed} label="changed" />
+        </Link>
       ))}
-      {rs.map((r) => (
-        <SessionLink class="item report tip" id={r.session} current={r.session === session} data-session={r.session} data-tip={`${project}\nReport · ${r.session}`}>
-          <Tile of="R" />
-          <span class="label">Report · {new Date(r.time).toDateString() === new Date().toDateString()
-            ? new Date(r.time).toLocaleTimeString(undefined, { timeStyle: 'short' }) : when(r.time)}</span>
-          {r.time > (seen[r.session] ?? 0) ? <span class="dot" role="img" aria-label="new report" /> : null}
-        </SessionLink>
-      ))}
-      {bs.map((b) => {
-        const changed = seen[b.id] !== b.version;
-        return (
-          <button class="item tip" aria-current={b.id === shown ? 'page' : undefined} data-id={b.id} data-tip={`${project} / ${b.file}`} onClick={() => go(`/b/${b.id}`)}>
-            <Tile of={b.file} />
-            <span class="label">{b.file}</span>
-            {changed ? <span class="dot" role="img" aria-label="changed" /> : null}
-          </button>
-        );
-      })}
-    </div>
+      {p.sessions.length ? (
+        <Link class="tab" href={sessionURL(p.sessions[0].session)} current={session !== null} data-tab="sessions">
+          Sessions<Badge n={p.tokens.length} /><Dot on={p.sessions.some((s) => s.unread)} label="new report" />
+        </Link>
+      ) : null}
+    </>
+  );
+}
+
+const clock = (t) => (new Date(t).toDateString() === new Date().toDateString()
+  ? new Date(t).toLocaleTimeString(undefined, { timeStyle: 'short' }) : when(t));
+
+// Agent text, so JSX text only.
+export function Sessions({ p, session }) {
+  return p.sessions.map((s) => (
+    <Link class="item" href={sessionURL(s.session)} current={s.session === session} data-session={s.session}>
+      <span class="two">
+        <span class="label">{s.task || s.line || s.session}</span>
+        <small>{[s.time ? clock(s.time) : '', s.branch].filter(Boolean).join(' · ')}</small>
+      </span>
+      <Badge n={s.waiting} />
+      <Dot on={s.unread} label="new report" />
+    </Link>
   ));
 }
 
