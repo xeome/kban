@@ -572,9 +572,6 @@ func (e *asked) decide(body map[string]any) (*answer, string) {
 		if !ok || i < 0 || int(i) >= len(opts) {
 			return nil, "option: not one of the shown options"
 		}
-		if kind == "option" && e.q["hard_to_undo"] == true && strings.TrimSpace(words) == "" {
-			return nil, "Hard to undo: add one line of why."
-		}
 		res.Option, res.Label = string("ABCD"[i]), opts[i].(map[string]any)["label"]
 	case kind == "text":
 		if strings.TrimSpace(words) == "" {

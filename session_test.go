@@ -216,11 +216,6 @@ func TestAnswerRules(t *testing.T) {
 
 	id := r.ask(hard())
 	tok := g.token("s", "D7")
-	for _, why := range []string{"", "   \n"} {
-		if code, body := g.answer(tok, map[string]any{"kind": "option", "option": 0, "words": why}); code != 400 || !strings.Contains(body, "why") {
-			t.Errorf("hard to undo with why %q: %d %s, want 400 asking why", why, code, body)
-		}
-	}
 	for _, kind := range []string{"option", "ask"} {
 		for _, bad := range []string{"true", "1.0", `"1"`, "null", "3", "-1"} {
 			if code, _ := g.answer(tok, fmt.Sprintf(`{"kind": %q, "option": %s, "words": "w"}`, kind, bad)); code != 400 {
@@ -237,7 +232,7 @@ func TestAnswerRules(t *testing.T) {
 		t.Fatalf("a refused answer reached the model: %v", m)
 	}
 	if code, _ := g.answer(tok, map[string]any{"kind": "ask", "option": 1}); code != 200 {
-		t.Fatalf("a lean on a hard-to-undo question needs no why: %d", code)
+		t.Fatalf("a lean on a hard-to-undo question: %d", code)
 	}
 	if a := r.answerOf(id); a.Kind != "ask" || a.Option != "B" || a.Label != "Redis" || a.Words != "" {
 		t.Errorf("ask with a lean = %+v", a)
@@ -254,9 +249,11 @@ func TestAnswerRules(t *testing.T) {
 		}
 	}
 	id = r.ask(hard())
-	g.answer(g.token("s", "D7"), map[string]any{"kind": "option", "option": 2, "words": "because X"})
-	if a := r.answerOf(id); a.Option != "C" || a.Words != "because X" {
-		t.Errorf("hard to undo with a why = %+v", a)
+	if code, body := g.answer(g.token("s", "D7"), map[string]any{"kind": "option", "option": 2}); code != 200 {
+		t.Fatalf("a bare pick on a hard-to-undo question: %d %s, want 200", code, body)
+	}
+	if a := r.answerOf(id); a.Kind != "option" || a.Option != "C" || a.Label != "Memory" || a.Words != "" {
+		t.Errorf("a bare pick on a hard-to-undo question = %+v", a)
 	}
 }
 
