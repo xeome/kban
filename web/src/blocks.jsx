@@ -257,7 +257,7 @@ function Question({ token, q, lean }) {
     <article class="q" data-q={q.id} data-token={token} tabIndex={-1} ref={self} onKeyDown={keys}>
       <Inline tag="h1" src={q.question} />
       {q.hard_to_undo
-        ? <p class="rec"><span class="pill"><span class="dot hot" />Hard to undo</span><span>Pick an option and give one line of why.</span></p>
+        ? <p class="rec"><span class="pill"><span class="dot hot" />Hard to undo</span></p>
         : <p class="rec"><span class="k">Recommended</span><span class="tile">A</span><Inline src={q.say_ok} /></p>}
       <div class="sheet">
         <div class="lab">Today</div><Inline tag="div" class="val" src={q.today} />
@@ -302,7 +302,7 @@ function Question({ token, q, lean }) {
           <button type="button" data-p="text" aria-pressed={String(pick === 'text')} onClick={() => choose('text')}>None of these</button>
         </div>
         <div class="echo">{echo}</div>
-        <Field tag="textarea" class="words" rows={1} spellcheck placeholder={q.hard_to_undo ? 'One line of why (required)' : 'Your words (optional)'} value={words[token] || ''}
+        <Field tag="textarea" class="words" rows={1} spellcheck placeholder="Your words (optional)" value={words[token] || ''}
           onInput={(e) => { const t = e.currentTarget; words[token] = t.value; t.style.height = ''; t.style.height = `${Math.min(t.scrollHeight + 2, 160)}px`; }} />
         <button class="btn" type="submit" data-ask="1" disabled={busy} title="Send it back for more: plainer, or answering your words. A picked option goes as a lean.">Ask</button>
         <button class="btn primary" type="submit" disabled={busy}>Send</button>

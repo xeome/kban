@@ -817,13 +817,21 @@ if (run('ask')) {
   await p.ev(`${q1('K2')}.querySelector('[data-ask]').click()`);
   await r.reply(rid);
   rid = await show(small('K2', ['North', 'South'], true));
-  const hardLean = [await pressed('K2'), await p.ev(`${q1('K2')}.querySelector('.echo').textContent`)];
+  const hardLean = [await pressed('K2'), await p.ev(`${q1('K2')}.querySelector('.echo').textContent`), await p.ev(`${q1('K2')}.querySelector('.pill')?.textContent`)];
   await p.click('.opt[data-i="1"]');
   await p.ev(`${q1('K2')}.querySelector('.answer .primary').click()`);
-  check('a hard-to-undo re-ask names the lean but picks nothing, and Send without a why shows the server\'s message',
-    hardLean[0] === -1 && hardLean[1].includes('South') && await p.until(`${q1('K2')}.querySelector('.status').textContent.includes('why')`) >= 0,
-    JSON.stringify(hardLean) + ' ' + await p.ev(`${q1('K2')}.querySelector('.status').textContent`));
+  a = await r.reply(rid);
+  check('a hard-to-undo re-ask shows its pill, names the lean but picks nothing, and Send with a bare pick is accepted',
+    hardLean[0] === -1 && hardLean[1].includes('South') && hardLean[2] === 'Hard to undo' && a?.kind === 'option' && a.option === 'B' && a.label === 'South' && a.words === '',
+    JSON.stringify(hardLean) + ' ' + JSON.stringify(a));
 
+  rid = await show(small('K2', ['North', 'South'], true));
+  await p.ev(`${q1('K2')}.querySelector('[data-p="text"]').click()`);
+  await p.ev(`${q1('K2')}.querySelector('.answer .primary').click()`);
+  const refused = await p.until(`${q1('K2')}?.querySelector('.status').textContent.includes('Write your answer')`);
+  check('None of these with no words shows the server\'s refusal on the question, which stays open',
+    refused >= 0 && await r.reply(rid, 500) === null && await p.ev(`!!${q1('K2')}`),
+    await p.ev(`${q1('K2')}?.querySelector('.status').textContent`));
   await p.click('.words');
   await p.type('cancelled words');
   r.cancel(rid);
