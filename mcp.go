@@ -295,6 +295,11 @@ func (r *relay) hold(ctx context.Context, pd *pending, payload map[string]any, p
 		note = fmt.Sprintf("%s closed with no answer: %s; ask again.", pd.id, strings.TrimSpace(string(text)))
 	default:
 		note = fmt.Sprintf("Answer to %s, %v\n\n```json\n%s\n```", pd.id, question, strings.TrimSpace(string(text)))
+		// The JSON alone reads as no answer yet to an agent that forgot the tool's help.
+		var a answer
+		if json.Unmarshal(text, &a) == nil && a.Kind == "ask" {
+			note = fmt.Sprintf("%s is not decided: the user wants more before deciding. Explain it plainer, with a worked example, then ask %s again.\n\n", pd.id, pd.id) + note
+		}
 	}
 	// The hub has closed the question, so this comment is the answer's only
 	// copy: an unreadable board is waited out, not given up on.

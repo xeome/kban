@@ -80,6 +80,18 @@ func TestAskOnACardReturnsAtOnceAndCommentsTheAnswer(t *testing.T) {
 	}
 }
 
+func TestAskOnACardAnsweredWithAskSaysToReAsk(t *testing.T) {
+	g := startSessions(t)
+	card := cardBoard(t, g.dir, "TODO.json")
+	r := g.relay("s")
+	r.tool(r.ask(question("card", card)))
+	g.answer(g.token("s", "D7"), map[string]any{"kind": "ask", "words": ""})
+	cs := cardComments(t, filepath.Join(g.dir, "TODO.json"), card, 1)
+	if len(cs) != 1 || !strings.HasPrefix(cs[0].Text, "D7 is not decided") || commentAnswer(t, cs[0]).Kind != "ask" {
+		t.Errorf("comments = %+v, want one that opens by saying D7 is not decided and keeps the answer", cs)
+	}
+}
+
 func TestAskOnACardChecksTheQuestionAndCardFirst(t *testing.T) {
 	g := startSessions(t)
 	card := cardBoard(t, g.dir, "TODO.json")
