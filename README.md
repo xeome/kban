@@ -43,7 +43,7 @@ cannot read; neither writes the file.
 
 ## Agent sessions
 
-`kban mcp` is an MCP server on stdio with two tools, `ask` and `report`, for
+`kban mcp` is an MCP server on stdio with three tools, `ask`, `withdraw` and `report`, for
 an agent session such as Claude Code. Register it once:
 
     claude mcp add -s user kban -- kban mcp     # kban mcp -p PORT for another port
@@ -60,6 +60,11 @@ is `/s/{session}`.
   seconds, the hub opens the session's page, unless it runs with
   `-no-open`. A question lives as long as the agent's call: cancel the call
   in the terminal, or stop the hub, and the question closes.
+- `ask` with `card` (and `board`, default `TODO.json`) returns at once
+  instead. The relay holds the question, and your answer lands on that card
+  as a comment by `hub`, so an agent watching the board gets it. One such
+  question waits per session; `withdraw` closes it. If the hub stops first,
+  the comment says the question closed unanswered.
 - `report` shows Markdown on the session's page and returns its URL at
   once. The hub keeps each session's newest 50 reports, and at most 500 in
   all, in memory. So a restart clears them.

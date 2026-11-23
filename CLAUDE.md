@@ -24,7 +24,8 @@ person and the agents working alongside them.
     server.go   HTTP + SSE, file read/write, the 409 on an unreadable file
     file.go     update: the one way the file is written; create: a new one
     cli.go      the agent commands
-    mcp.go      `kban mcp`: the ask and report tools for an agent session, relayed to the hub
+    mcp.go      `kban mcp`: the ask, withdraw and report tools, relayed to the hub; an ask on
+                a card returns at once and the relay comments the answer on the card
     session.go  questions: held asks, answers, acks, images, reports, /s/{session}
     push.go     the phone push through ntfy.sh, sent from the poll loop
     main.go     flags, serving or joining the hub on the port, browser opening

@@ -345,6 +345,14 @@
         ]
       },
       "description": "Up to 6 blocks for the reader who doubts something, shown collapsed."
+    },
+    "card": {
+      "type": "string",
+      "description": "A card id. The call returns at once, and the answer lands as a comment by hub on this card."
+    },
+    "board": {
+      "type": "string",
+      "description": "The board file holding card, relative to the session directory. Default TODO.json."
     }
   },
   "required": [
