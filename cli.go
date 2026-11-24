@@ -19,7 +19,7 @@ var commands = map[string]string{
 	"show":    "[ID]",
 	"add":     "COLUMN TITLE",
 	"move":    "ID COLUMN",
-	"set":     "ID title|notes TEXT",
+	"set":     "ID title|notes|meta.KEY TEXT",
 	"comment": "ID TEXT",
 	"init":    "COLUMN...",
 }
@@ -85,8 +85,15 @@ func cli(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if name == "comment" {
 		text = strings.TrimSpace(text) // as the browser posts it
 	}
-	if name == "set" && a[1] != "title" && a[1] != "notes" {
-		return fail(fmt.Errorf("a card has no field %q: set title or notes", a[1]))
+	key, meta := "", false
+	if name == "set" {
+		key, meta = strings.CutPrefix(a[1], "meta.")
+		if !meta && a[1] != "title" && a[1] != "notes" {
+			return fail(fmt.Errorf("a card has no field %q: set title, notes or meta.KEY", a[1]))
+		}
+		if meta && key == "" {
+			return fail(errors.New("meta. names no key: set meta.KEY TEXT"))
+		}
 	}
 	if strings.TrimSpace(text) == "" && (name == "add" || name == "comment" || name == "set" && a[1] == "title") {
 		return fail(errors.New("TEXT is empty"))
@@ -123,9 +130,15 @@ func cli(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			b.Columns[c].Cards = slices.Delete(b.Columns[c].Cards, i, i+1)
 			b.Columns[to].Cards = append(b.Columns[to].Cards, moved)
 		case "set":
-			if a[1] == "title" {
+			switch {
+			case meta:
+				if card.Meta == nil {
+					card.Meta = map[string]string{}
+				}
+				card.Meta[key] = text // Write drops it when empty
+			case a[1] == "title":
 				card.Title = text
-			} else {
+			default:
 				card.Notes = text
 			}
 		case "comment":

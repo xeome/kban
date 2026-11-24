@@ -350,6 +350,28 @@ if (run('undo')) {
   }
 }
 
+// --- meta: an agent's keys, shown read-only, kept through a save and an undo ---
+if (run('meta')) {
+  const { f, p } = await fresh(4330, ['M']);
+  const face = `document.querySelector('.card[data-id="id-M"]').outerHTML`;
+  await p.ev(`document.querySelectorAll('.card')[0].click()`);
+  await p.ev(`document.querySelector('#card-notes').focus()`);
+  await p.type(' zz');
+  await saved(p);
+  await p.key('Escape'); // leave the field: its undo step exists from here
+  check('(meta) setup: the notes edit reached the file', byId(read(f), 'id-M').notes === 'notes of M zz', JSON.stringify(byId(read(f), 'id-M')));
+  const before = await p.ev(face);
+  check('(meta) kban set meta exits 0', kban('set', '-f', f, 'id-M', 'meta.tier', 'tier-two-value'));
+  const shown = await p.until(`!!document.querySelector('#card-kv')?.textContent.includes('tier-two-value')`);
+  check('(meta) the card window lists the key and its value', shown >= 0 && await p.ev(`[...document.querySelectorAll('#card-kv dt')].map((e) => e.textContent).join() === 'tier' && document.querySelector('#card-kv dd').textContent === 'tier-two-value'`));
+  check('(meta) the card face is unchanged', (await p.ev(face)) === before);
+  await p.key('u');
+  await saved(p);
+  await sleep(200);
+  const m = byId(read(f), 'id-M');
+  check('(meta) undo reverts the notes and keeps the agent meta', m.notes === 'notes of M' && m.meta?.tier === 'tier-two-value', JSON.stringify(m));
+}
+
 // --- a broken file at start: nothing editable, nothing sent ------------------
 if (run('broken')) {
   const f = path.join(dir, 'broken.json');

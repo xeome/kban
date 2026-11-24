@@ -46,7 +46,10 @@ person and the agents working alongside them.
   exits 2 instead of overwriting. Accepting and dropping a field would
   silently delete what an agent wrote. One exception: a key repeated in one
   object keeps its last value (encoding/json), and keys match
-  case-insensitively.
+  case-insensitively; a repeated `meta` key merges its maps instead.
+- **`meta` belongs to agents, and kban gives no key a meaning.** The browser
+  shows it read-only and never changes it. `Write` drops an empty value, so
+  "", a null and a removal are one state.
 - **`Parse` and `Write` must round-trip.** `Write(Parse(s)) == s` for any file
   kban itself produced.
 - **The browser never merges.** It sends `{base, board}` to its board's

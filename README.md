@@ -34,7 +34,7 @@ Agents change the board with these, never by editing the file:
     kban show [-f FILE] [ID]                 # the board, or one card, as JSON
     kban add [-f FILE] COLUMN TITLE          # prints the new card's id
     kban move [-f FILE] ID COLUMN            # to the end of COLUMN
-    kban set [-f FILE] ID title|notes TEXT
+    kban set [-f FILE] ID title|notes|meta.KEY TEXT  # empty TEXT removes a meta key
     kban comment [-f FILE] [-a NAME] ID TEXT
     kban init [-f FILE] [-i TEXT] COLUMN...  # a new board with these columns, no cards
 
@@ -97,6 +97,9 @@ card face.
           "id": "q4mz7kxa",
           "title": "Fix login redirect",
           "notes": "Bottom line: cookie path was wrong.",
+          "meta": {
+            "tier": "1"
+          },
           "comments": [
             {
               "author": "claude",
@@ -113,11 +116,14 @@ card face.
 
 - Every card has an id kban gives it, which commands, branch names and the
   like can use; a column is identified by its title.
-- `notes` and `comments` may be left out.
+- `notes`, `meta` and `comments` may be left out.
+- `meta` holds string keys and values an agent keeps on a card for its own
+  use. kban gives no key a meaning and lists them read-only in the card
+  window. An empty value is no key.
 - Any other field, a card with no id or a repeated one, a syntax error or
   trailing text makes the file unreadable. The page shows the error with its
   line, and kban does not write the file until it reads again.
 
-When you and an agent change the board at once, each card, column and order
-merges separately, and your change wins where both touched the same thing.
+When you and an agent change the board at once, each card, column, order
+and meta key merges separately, and your change wins where both touched the same thing.
 Comments from both sides are kept. `u` undoes only your own last action.
