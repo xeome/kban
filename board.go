@@ -18,10 +18,11 @@ type Comment struct {
 }
 
 type Card struct {
-	ID       string    `json:"id"`
-	Title    string    `json:"title"`
-	Notes    string    `json:"notes,omitempty"`
-	Comments []Comment `json:"comments,omitempty"`
+	ID       string            `json:"id"`
+	Title    string            `json:"title"`
+	Notes    string            `json:"notes,omitempty"`
+	Meta     map[string]string `json:"meta,omitempty"`
+	Comments []Comment         `json:"comments,omitempty"`
 }
 
 type Column struct {
@@ -133,6 +134,12 @@ func scan(src string) (unknown int64, cards []int64) {
 		case json.Delim('{'):
 			for dec.More() {
 				k, _ := dec.Token()
+				if t.Kind() == reflect.Map {
+					if at := walk(t.Elem()); at >= 0 {
+						return at
+					}
+					continue
+				}
 				at := dec.InputOffset()
 				f, ok := field(t, k.(string))
 				if !ok {
@@ -173,13 +180,32 @@ func Write(b Board) string {
 		if b.Columns[i].Cards == nil {
 			b.Columns[i].Cards = []Card{} // an agent appends to an array, not to null
 		}
+		b.Columns[i].Cards = slices.Clone(b.Columns[i].Cards)
+		for j := range b.Columns[i].Cards {
+			c := &b.Columns[i].Cards[j]
+			c.Meta = present(c.Meta)
+		}
 	}
 	var w strings.Builder
 	enc := json.NewEncoder(&w)
 	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
-	enc.Encode(b) // strings and slices only: it cannot fail
+	enc.Encode(b) // strings, slices and string maps only: it cannot fail
 	return w.String()
+}
+
+// "", a null and a removal all mean no key, and an empty meta is no meta.
+func present(m map[string]string) map[string]string {
+	out := map[string]string{}
+	for k, v := range m {
+		if v != "" {
+			out[k] = v
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // Merge reconciles concurrent edits. Each unit (instructions, column list, a
@@ -187,7 +213,7 @@ func Write(b Board) string {
 // value if the client changed it from base, otherwise disk's. Comments are
 // a set per card instead: disk's, plus the client's additions, minus the
 // client's deletions, so neither side's comment is lost to the other's
-// edit. A card's title merges like its notes.
+// edit. A card's title merges like its notes, and so does each meta key.
 func Merge(base, client, disk Board) Board {
 	if Write(client) == Write(base) {
 		return disk
@@ -272,6 +298,7 @@ func Merge(base, client, disk Board) Board {
 		if inC && inB {
 			card.Title = pick(cc.Title, bc.Title, dc.Title)
 			card.Notes = pick(cc.Notes, bc.Notes, dc.Notes)
+			card.Meta = mergeMeta(bc.Meta, cc.Meta, dc.Meta)
 		}
 		card.Comments = mergeComments(bc.Comments, cc.Comments, dc.Comments)
 		return card
@@ -298,6 +325,16 @@ func Merge(base, client, disk Board) Board {
 		}
 	}
 	return out
+}
+
+func mergeMeta(base, client, disk map[string]string) map[string]string {
+	out := map[string]string{}
+	for _, m := range []map[string]string{base, client, disk} {
+		for k := range m {
+			out[k] = pick(client[k], base[k], disk[k])
+		}
+	}
+	return present(out)
 }
 
 func mergeComments(base, client, disk []Comment) []Comment {

@@ -1,3 +1,4 @@
+import { Fragment } from 'preact';
 import { useEffect, useRef } from 'preact/hooks';
 import { diagram } from './diagram.js';
 import { md } from './md.js';
@@ -183,6 +184,14 @@ export function CardBody() {
               <button class="pick" aria-pressed={String(j === c)} onClick={() => moveOpenCard(j)}>{cl.title || 'Untitled'}</button>
             ))}
           </div>
+          {card.meta ? (
+            <>
+              <h3 class="kv-head">Meta</h3>
+              <dl class="kv" id="card-kv">
+                {Object.entries(card.meta).map(([k, v]) => <Fragment key={k}><dt>{k}</dt><dd>{v}</dd></Fragment>)}
+              </dl>
+            </>
+          ) : null}
           <button class="btn danger" id="card-delete" onClick={deleteOpenCard}>Delete card</button>
         </aside>
       </div>

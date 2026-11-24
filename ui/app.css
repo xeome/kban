@@ -410,6 +410,10 @@ kbd {
 .pick:hover { color: var(--text); background: var(--hover); }
 .pick[aria-pressed='true'] { color: var(--bright); background: var(--sel); }
 #card-cols { display: flex; flex-direction: column; gap: 2px; }
+.card-side .kv-head { margin-top: 14px; }
+.kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 10px; margin: 0 0 0 8px; font-size: 12px; }
+.kv dt { color: var(--text); }
+.kv dd { margin: 0; color: var(--bright); overflow-wrap: anywhere; }
 #card-delete { margin-top: auto; align-self: flex-start; }
 
 .card-body.new { grid-template-columns: 1fr; }

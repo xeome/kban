@@ -70,6 +70,13 @@ func TestParseRejects(t *testing.T) {
 			`line 5: card "b" has no id`},
 		{"repeated id", "{\n  \"columns\": [\n    {\"title\": \"T\", \"cards\": [{\"id\": \"x\", \"title\": \"a\"}]},\n    {\"title\": \"U\", \"cards\": [\n      {\"id\": \"x\", \"title\": \"b\"}\n    ]}\n  ]\n}\n",
 			`line 5: card "b" has the id "x" of an earlier card`},
+		{"meta number value", "{\n  \"columns\": [\n    {\"title\": \"T\", \"cards\": [\n      {\"id\": \"a\", \"title\": \"a\", \"meta\": {\"k\": 1}}\n    ]}\n  ]\n}\n", "line 4:"},
+		{"meta object value", "{\n  \"columns\": [\n    {\"title\": \"T\", \"cards\": [\n      {\"id\": \"a\", \"title\": \"a\", \"meta\": {\"k\": {}}}\n    ]}\n  ]\n}\n", "line 4:"},
+		{"meta array value", "{\n  \"columns\": [\n    {\"title\": \"T\", \"cards\": [\n      {\"id\": \"a\", \"title\": \"a\", \"meta\": {\"k\": []}}\n    ]}\n  ]\n}\n", "line 4:"},
+		{"unknown field after a card with meta", "{\n  \"columns\": [\n    {\"title\": \"T\", \"cards\": [\n      {\"id\": \"a\", \"title\": \"a\", \"meta\": {\"k\": \"v\"}},\n      {\"id\": \"b\", \"title\": \"b\",\n       \"bogus\": 1}\n    ]}\n  ]\n}\n",
+			`line 6: json: unknown field "bogus"`},
+		{"repeated id after a card with meta", "{\n  \"columns\": [\n    {\"title\": \"T\", \"cards\": [\n      {\"id\": \"x\", \"title\": \"a\", \"meta\": {\"k\": \"v\"}},\n      {\"id\": \"x\", \"title\": \"b\"}\n    ]}\n  ]\n}\n",
+			`line 5: card "b" has the id "x" of an earlier card`},
 		{"null card", "{\"columns\": [{\"title\": \"T\", \"cards\": [{\"id\": \"x\", \"title\": \"a\"},\n  null]}]}\n", `line 2: card "" has no id`},
 	}
 	for _, tc := range cases {
@@ -208,4 +215,80 @@ func (b Board) with(c, i int, edit func(*Card)) Board {
 	}
 	edit(&out.Columns[c].Cards[i])
 	return out
+}
+
+func TestMetaRoundTrip(t *testing.T) {
+	src := `{
+  "instructions": "",
+  "columns": [
+    {
+      "title": "T",
+      "cards": [
+        {
+          "id": "a",
+          "title": "a",
+          "meta": {
+            "b": "two",
+            "k": "1"
+          }
+        }
+      ]
+    }
+  ]
+}
+`
+	b, err := Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := Write(b); got != src {
+		t.Fatalf("round trip drifted:\n%s", got)
+	}
+	empty := "{\"columns\": [{\"title\": \"T\", \"cards\": [{\"id\": \"a\", \"title\": \"a\", \"meta\": {\"k\": \"\", \"j\": null}}]}]}"
+	if b, err := Parse(empty); err != nil || strings.Contains(Write(b), `"meta"`) {
+		t.Fatalf("an empty or null value must be written as no key: %v\n%s", err, Write(b))
+	}
+	mine := board(col("T", "a")).with(0, 0, func(c *Card) { c.Meta = map[string]string{"k": "", "j": "x"} })
+	if got := Write(mine); strings.Contains(got, `"k"`) || !strings.Contains(got, `"j": "x"`) {
+		t.Fatalf("Write = %s, want j kept and the empty k dropped", got)
+	}
+	if _, ok := mine.Columns[0].Cards[0].Meta["k"]; !ok {
+		t.Fatalf("Write changed the caller's meta")
+	}
+}
+
+// Each row changes something on both sides, so Merge's whole-board shortcuts
+// do not answer it and the per-key rule is what runs.
+func TestMergeMeta(t *testing.T) {
+	plain := board(col("Todo", "a"))
+	on := func(notes string, m map[string]string) Board {
+		return plain.with(0, 0, func(c *Card) { c.Notes, c.Meta = notes, m })
+	}
+	kv := func(kv ...string) map[string]string {
+		m := map[string]string{}
+		for i := 0; i < len(kv); i += 2 {
+			m[kv[i]] = kv[i+1]
+		}
+		return m
+	}
+	cases := []struct {
+		name                     string
+		base, client, disk, want Board
+	}{
+		{"client and disk set different keys",
+			on("", kv("k", "v")), on("", kv("k", "v", "c", "1")), on("", kv("k", "v", "d", "2")), on("", kv("k", "v", "c", "1", "d", "2"))},
+		{"both set one key: client wins",
+			on("", kv("k", "v")), on("", kv("k", "client")), on("", kv("k", "disk")), on("", kv("k", "client"))},
+		{"client removes a key, disk adds another",
+			on("", kv("k", "v")), on("", nil), on("", kv("k", "v", "j", "1")), on("", kv("j", "1"))},
+		{"disk removes a key, client edits notes",
+			on("", kv("k", "v")), on("n", kv("k", "v")), on("", nil), on("n", nil)},
+		{"client edits notes, disk sets a key",
+			on("", nil), on("n", nil), on("", kv("k", "v")), on("n", kv("k", "v"))},
+	}
+	for _, tc := range cases {
+		if got := Merge(tc.base, tc.client, tc.disk); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s:\n got %+v\nwant %+v", tc.name, got, tc.want)
+		}
+	}
 }

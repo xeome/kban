@@ -351,3 +351,18 @@ func TestInvalidFileIsNeverOverwritten(t *testing.T) {
 		t.Errorf("GET = %+v, want the error with its line", st)
 	}
 }
+
+// The browser never sends meta it changed, so a save against a stale view
+// keeps what an agent set meanwhile.
+func TestAgentMetaDuringBrowserEdit(t *testing.T) {
+	f := start(t)
+	base := f.get()
+	f.agent(func(b *Board) { b.Columns[0].Cards[0].Meta = map[string]string{"tier": "2"} })
+	mine := clone(base)
+	mine.Columns[0].Cards[0].Notes = "edited"
+	f.put(base, mine)
+	got := f.read().Columns[0].Cards[0]
+	if got.Notes != "edited" || got.Meta["tier"] != "2" {
+		t.Fatalf("card = %+v, want the browser's notes and the agent's meta", got)
+	}
+}

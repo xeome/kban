@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -145,5 +146,48 @@ func TestCLIInit(t *testing.T) {
 	}
 	if _, err := os.Stat(none); err == nil {
 		t.Errorf("init with no column created the file")
+	}
+}
+
+func TestCLIMeta(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "board.json")
+	os.WriteFile(path, []byte(Write(board(col("Todo", "a")))), 0o644)
+	for _, args := range [][]string{
+		{"set", "-f", path, "a", "meta.tier", "2"},
+		{"set", "-f", path, "a", "meta.ask", "-"},
+		{"set", "-f", path, "a", "meta.a.b", "dotted"},
+	} {
+		if code, _, stderr := kban(t, "approve plan\n", args...); code != 0 {
+			t.Fatalf("%v exited %d: %s", args, code, stderr)
+		}
+	}
+	want := map[string]string{"tier": "2", "ask": "approve plan", "a.b": "dotted"}
+	if got := readBoard(t, path).Columns[0].Cards[0].Meta; !reflect.DeepEqual(got, want) {
+		t.Fatalf("meta = %v, want %v", got, want)
+	}
+	code, stdout, _ := kban(t, "", "show", "-f", path, "a")
+	var shown struct{ Meta map[string]string }
+	if json.Unmarshal([]byte(stdout), &shown); code != 0 || !reflect.DeepEqual(shown.Meta, want) {
+		t.Fatalf("show a = %d %s, want its meta", code, stdout)
+	}
+	for _, k := range []string{"meta.tier", "meta.ask", "meta.a.b"} {
+		if code, _, stderr := kban(t, "", "set", "-f", path, "a", k, ""); code != 0 {
+			t.Fatalf("removing %s exited %d: %s", k, code, stderr)
+		}
+	}
+	if src, _ := os.ReadFile(path); strings.Contains(string(src), `"meta"`) {
+		t.Fatalf("the last removal must drop meta from the card:\n%s", src)
+	}
+	was, _ := os.ReadFile(path)
+	for _, args := range [][]string{
+		{"set", "-f", path, "a", "meta.", "x"},
+		{"set", "-f", path, "a", "meta", "x"},
+	} {
+		if code, _, stderr := kban(t, "", args...); code != 1 || stderr == "" {
+			t.Errorf("%v exited %d, want 1 with a message", args, code)
+		}
+	}
+	if got, _ := os.ReadFile(path); !bytes.Equal(got, was) {
+		t.Errorf("a refused set changed the file:\n%s", got)
 	}
 }
