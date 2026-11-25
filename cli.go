@@ -12,9 +12,6 @@ import (
 	"time"
 )
 
-// commentTime is a comment's time layout, as the browser writes it.
-const commentTime = "2006-01-02T15:04:05-07:00"
-
 var commands = map[string]string{
 	"show":    "[ID]",
 	"add":     "COLUMN TITLE",
@@ -142,7 +139,7 @@ func cli(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 				card.Notes = text
 			}
 		case "comment":
-			card.Comments = append(card.Comments, Comment{author, time.Now().Format(commentTime), text})
+			card.Comments = append(card.Comments, Comment{author, time.Now().Format("2006-01-02T15:04:05-07:00"), text})
 		}
 		return nil
 	})

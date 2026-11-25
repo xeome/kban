@@ -151,8 +151,8 @@ func TestRelayListsAskAndReport(t *testing.T) {
 	for _, tool := range tools {
 		names = append(names, tool.(map[string]any)["name"])
 	}
-	if fmt.Sprint(names) != "[ask report withdraw]" {
-		t.Fatalf("tools = %v, want ask, report and withdraw", names)
+	if fmt.Sprint(names) != "[ask report]" {
+		t.Fatalf("tools = %v, want ask and report", names)
 	}
 	if props, _ := tools[1].(map[string]any)["inputSchema"].(map[string]any)["properties"].(map[string]any); props["text"] == nil {
 		t.Errorf("report's schema = %v, want a text property", tools[1])
